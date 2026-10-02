@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codebased-estimator"
+version = "0.1.0"
+description = "Research demo for code-based recovery cost estimation"
+requires-python = ">=3.9"
+dependencies = ["cryptographic-estimators==2.1.1"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+codebased-estimator = "codebased_estimator.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["codebased_estimator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

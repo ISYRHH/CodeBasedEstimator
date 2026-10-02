@@ -1,0 +1,95 @@
+"""Exercise CLI records, algorithm selection and DOOM context end to end."""
+
+import json
+
+import pytest
+
+from codebased_estimator.__main__ import main
+
+
+@pytest.fixture
+def attack_file(tmp_path):
+    path = tmp_path / "attack.json"
+    path.write_text(json.dumps({
+        "name": "cli-test", "goal": "msg_recovery",
+        "problem": {"kind": "sd", "parameters": {"n": 40, "k": 20, "w": 4},
+                    "log2_solutions": 2},
+    }))
+    return path
+
+
+def test_cli_combines_independent_algorithm_lists_in_one_record(attack_file, capsys):
+    assert main(["estimate", str(attack_file), "--classical-algorithms", "Prange", "Stern",
+                 "--quantum-algorithms", "QPrange", "QSS", "QMMT+", "--json"]) == 0
+    records = json.loads(capsys.readouterr().out)
+    assert len(records) == 1
+    assert set(records[0]["backends"]) == {"classical", "quantum"}
+    rows = records[0]["results"]
+    assert [(row["model"], row["algorithm"]) for row in rows] == [
+        ("classical", "Prange"), ("classical", "Stern"),
+        ("quantum", "QPrange"), ("quantum", "QSS"), ("quantum", "QMMT+"),
+    ]
+    assert all(row["status"] == "computed" for row in rows[:2])
+    assert all(row["status"] == "not_implemented" for row in rows[2:])
+    conclusions = records[0]["conclusions"]
+    assert conclusions["classical"]["status"] == "computed"
+    assert conclusions["classical"]["best"] == [min(rows[:2], key=lambda row: row["time_log2"])]
+    assert conclusions["quantum"]["status"] == "unavailable"
+    assert conclusions["quantum"]["best"] == []
+
+
+def test_cli_prints_separate_classical_and_quantum_conclusions(attack_file, capsys):
+    assert main(["estimate", str(attack_file), "--classical-algorithms", "Prange",
+                 "--quantum-algorithms", "QSS"]) == 0
+    output = capsys.readouterr().out
+    assert "Best classical: Prange | time=2^" in output
+    assert "bit_operations; memory=2^" in output
+    assert "bits; parameters=" in output
+    assert "Best quantum: -- (unavailable)" in output
+
+
+def test_cli_doom_flags_preserve_solutions_and_algorithm_names(attack_file, capsys):
+    assert main(["estimate", str(attack_file), "--classical-algorithms", "Prange", "Stern",
+                 "--quantum-algorithms", "QPrange", "QSS", "QMMT+",
+                 "--doom", "qcsd", "--targets", "32", "--json"]) == 0
+    records = json.loads(capsys.readouterr().out)
+    assert len(records) == 1
+    attack = records[0]["instance"]
+    assert attack["tags"] == ["doom:qcsd"]
+    assert attack["targets"] == 32
+    assert attack["problem"]["log2_solutions"] == 2
+    assert [row["algorithm"] for row in records[0]["results"]] == [
+        "Prange", "Stern", "QPrange", "QSS", "QMMT+",
+    ]
+    assert all(row["status"] == "not_implemented" and row["time_log2"] is None
+               for row in records[0]["results"])
+
+
+def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys):
+    assert main(["demo", "--json"]) == 0
+    records = json.loads(capsys.readouterr().out)
+    names = [record["instance"]["name"] for record in records]
+    assert len(names) == len(set(names)) == 6
+    hamming = [record for record in records if record["instance"]["parameter_set"] == "hamming"]
+    assert len(hamming) == 2
+    assert {record["instance"]["goal"] for record in hamming} == {"key_recovery", "msg_recovery"}
+    for record in hamming:
+        quantum = [row for row in record["results"] if row["model"] == "quantum"]
+        assert [row["algorithm"] for row in quantum] == ["QPrange", "QSS", "QMMT+"]
+        assert any(row["model"] == "classical" and row["status"] == "computed"
+                   for row in record["results"])
+
+
+def test_cli_rejects_removed_model_flag(attack_file, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["estimate", str(attack_file), "--model", "doom"])
+    assert exc.value.code == 2
+    assert "--model" in capsys.readouterr().err
+
+
+def test_cli_reports_unknown_quantum_algorithm(attack_file, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["estimate", str(attack_file), "--classical-algorithms", "Prange",
+              "--quantum-algorithms", "QUnknown", "--json"])
+    assert exc.value.code == 2
+    assert "QUnknown" in capsys.readouterr().err

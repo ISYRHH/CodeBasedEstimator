@@ -1,0 +1,15 @@
+{
+  "name": "toy-hamming/msg_recovery",
+  "scheme": "synthetic-demo",
+  "parameter_set": "toy",
+  "goal": "msg_recovery",
+  "route": "synthetic decoding subproblem; no scheme recovery reduction claimed",
+  "problem": {
+    "kind": "sd",
+    "parameters": {"n": 40, "k": 20, "w": 4, "q": 2},
+    "log2_solutions": 0
+  },
+  "targets": 1,
+  "tags": [],
+  "assumptions": ["Synthetic parameters; not an NGCC security estimate."]
+}
