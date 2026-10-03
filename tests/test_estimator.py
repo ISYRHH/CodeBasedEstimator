@@ -33,7 +33,8 @@ def upstream_algorithm(family, algorithm, parameters, **problem_options):
 ])
 def test_costs_and_parameters_match_fresh_upstream_algorithms(kind, parameters, family, algorithms):
     problem = Problem(kind, parameters, None if kind == "rank_sd" else 0)
-    report = estimate(instance(problem), options=Options(classical_algorithms=algorithms))
+    report = estimate(instance(problem), options=Options(
+        classical_algorithms=algorithms, quantum_algorithms=()))
     assert [row.algorithm for row in report.results] == list(algorithms)
     for row in report.results:
         problem_options = {} if kind == "rank_sd" else {"nsolutions": 0}
@@ -57,7 +58,8 @@ def test_none_preserves_expected_solutions_and_zero_means_one_solution(q, w, fam
     results = []
     for solutions in (None, 0):
         row = estimate(instance(Problem("sd", parameters, solutions)),
-                       options=Options(classical_algorithms=("Prange",))).results[0]
+                       options=Options(classical_algorithms=("Prange",),
+                                       quantum_algorithms=())).results[0]
         direct_parameters = dict(parameters)
         direct_options = {} if solutions is None else {"nsolutions": solutions}
         if q == 2:
@@ -78,7 +80,8 @@ def test_none_preserves_expected_solutions_and_zero_means_one_solution(q, w, fam
 def test_qary_generic_decoding_uses_nonzero_syndrome_model():
     parameters = {"n": 40, "k": 20, "w": 4, "q": 3}
     row = estimate(instance(Problem("sd", parameters, 0)),
-                   options=Options(classical_algorithms=("LeeBrickell",))).results[0]
+                   options=Options(classical_algorithms=("LeeBrickell",),
+                                   quantum_algorithms=())).results[0]
     nonzero = upstream_algorithm("SDFq", "LeeBrickell", parameters,
                                  nsolutions=0, is_syndrome_zero=False)
     zero = upstream_algorithm("SDFq", "LeeBrickell", parameters,
@@ -95,7 +98,7 @@ def test_qary_generic_decoding_uses_nonzero_syndrome_model():
 ])
 def test_zero_memory_bound_never_reports_a_feasible_estimate(problem, algorithm):
     report = estimate(instance(problem), options=Options(
-        classical_algorithms=(algorithm,), memory_bound_log2_bits=0))
+        classical_algorithms=(algorithm,), quantum_algorithms=(), memory_bound_log2_bits=0))
     assert report.results
     assert all(row.status in ("infeasible", "not_applicable") for row in report.results)
     assert all(row.reason for row in report.results)
@@ -135,15 +138,36 @@ def test_estimate_requires_at_least_one_enabled_family():
                  options=Options(classical_algorithms=(), quantum_algorithms=()))
 
 
-def test_default_classical_selection_still_includes_all_upstream_algorithms():
-    report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 4}, 0)),
-                      options=Options(classical_algorithms=None))
+def test_defaults_include_all_upstream_classical_and_registered_quantum_algorithms():
+    from codebased_estimator.quantum import QuantumModel
+
+    report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 4}, 0)))
     module = importlib.import_module("cryptographic_estimators.SDEstimator")
     direct = module.SDEstimator(n=40, k=20, w=4, nsolutions=0)
-    assert {row.algorithm for row in report.results} == {
+    classical = [row for row in report.results if row.model == "classical"]
+    quantum = [row for row in report.results if row.model == "quantum"]
+    assert {row.algorithm for row in classical} == {
         type(algorithm).__name__ for algorithm in direct.algorithms()
     }
-    assert all(row.model == "classical" for row in report.results)
+    assert {"Prange", "Stern", "BJMM", "BJMMplus", "BothMay", "MayOzerov"} <= {
+        row.algorithm for row in classical
+    }
+    assert all(row.status == "computed" for row in classical)
+    assert tuple(row.algorithm for row in quantum) == QuantumModel.algorithms
+    assert {row.algorithm for row in quantum} == {"QPrange", "QSS", "QMMT+"}
+    assert report.options.classical_algorithms is None
+    assert report.options.quantum_algorithms == QuantumModel.algorithms
+    assert set(report.backends) == {"classical", "quantum"}
+    assert all(row.status == "not_implemented" and row.time_log2 is None
+               and row.memory_log2 is None and row.reason for row in quantum)
+    minimum = min(row.time_log2 for row in classical)
+    assert report.conclusions["classical"].status == "computed"
+    assert report.conclusions["classical"].best == tuple(
+        row for row in classical if row.time_log2 == minimum
+    )
+    assert report.conclusions["quantum"].status == "unavailable"
+    assert report.conclusions["quantum"].best == ()
+    json.dumps(report.to_dict(), allow_nan=False)
 
 
 @pytest.mark.parametrize("doom_tag", ["doom:qccf", "doom:qcsd"])
@@ -234,7 +258,8 @@ def test_doom_is_not_a_separate_estimate_mode():
 ])
 def test_generic_backend_does_not_silently_discard_problem_structure(problem, instance_options):
     report = estimate(instance(problem, **instance_options),
-                      options=Options(classical_algorithms=("Prange", "Stern")))
+                      options=Options(classical_algorithms=("Prange", "Stern"),
+                                      quantum_algorithms=()))
     assert [row.algorithm for row in report.results] == ["Prange", "Stern"]
     assert all(row.status == "not_implemented" for row in report.results)
     assert all(row.time_log2 is None and row.memory_log2 is None and row.reason

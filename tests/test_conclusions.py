@@ -96,7 +96,7 @@ def test_differing_time_units_prevent_a_minimum_only_in_the_affected_family():
 def test_disabled_families_are_not_requested_even_if_results_were_supplied():
     rows = [Estimate("Prange", "classical", "computed", 20, 10),
             Estimate("QPrange", "quantum", "computed", 10, 10)]
-    classical_only = report(rows, Options()).conclusions
+    classical_only = report(rows, Options(quantum_algorithms=())).conclusions
     assert classical_only["classical"].best == (rows[0],)
     assert classical_only["quantum"].status == "not_requested"
     assert classical_only["quantum"].best == ()

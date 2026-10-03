@@ -4,7 +4,10 @@ import json
 
 import pytest
 
+from cryptographic_estimators.SDEstimator import SDEstimator
+
 from codebased_estimator.__main__ import main
+from codebased_estimator.quantum import QuantumModel
 
 
 @pytest.fixture
@@ -16,6 +19,38 @@ def attack_file(tmp_path):
                     "log2_solutions": 2},
     }))
     return path
+
+
+def test_cli_defaults_to_all_upstream_classical_and_registered_quantum_algorithms(attack_file, capsys):
+    assert main(["estimate", str(attack_file), "--json"]) == 0
+    record, = json.loads(capsys.readouterr().out)
+    classical = [row for row in record["results"] if row["model"] == "classical"]
+    quantum = [row for row in record["results"] if row["model"] == "quantum"]
+    upstream = SDEstimator(n=40, k=20, w=4, nsolutions=2)
+    assert {row["algorithm"] for row in classical} == {
+        type(algorithm).__name__ for algorithm in upstream.algorithms()
+    }
+    assert all(row["status"] == "computed" for row in classical)
+    assert tuple(row["algorithm"] for row in quantum) == QuantumModel.algorithms
+    assert all(row["status"] == "not_implemented" and row["time_log2"] is None
+               and row["memory_log2"] is None for row in quantum)
+    assert record["options"]["classical_algorithms"] is None
+    assert record["options"]["quantum_algorithms"] == list(QuantumModel.algorithms)
+    assert set(record["backends"]) == {"classical", "quantum"}
+    assert record["conclusions"]["classical"]["status"] == "computed"
+    assert record["conclusions"]["quantum"]["status"] == "unavailable"
+    assert record["conclusions"]["quantum"]["best"] == []
+
+
+@pytest.mark.parametrize("disabled,enabled", [("classical", "quantum"), ("quantum", "classical")])
+def test_cli_empty_algorithm_list_disables_only_that_family(attack_file, capsys, disabled, enabled):
+    assert main(["estimate", str(attack_file), f"--{disabled}-algorithms", "--json"]) == 0
+    record, = json.loads(capsys.readouterr().out)
+    assert record["results"]
+    assert {row["model"] for row in record["results"]} == {enabled}
+    assert set(record["backends"]) == {enabled}
+    assert record["conclusions"][disabled]["status"] == "not_requested"
+    assert record["conclusions"][enabled]["status"] != "not_requested"
 
 
 def test_cli_combines_independent_algorithm_lists_in_one_record(attack_file, capsys):

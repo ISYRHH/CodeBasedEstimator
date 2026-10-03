@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from importlib import metadata
+from functools import lru_cache
 import math
 from numbers import Integral, Real
 import os
@@ -11,6 +12,55 @@ from pathlib import Path
 import subprocess
 
 from .models import AttackInstance, Estimate, Options
+
+
+def _m4ri_cost(n: int, k: int, r: int) -> int:
+    helper = importlib.import_module("cryptographic_estimators.SDEstimator.sd_helper")
+    return helper._gaussian_elimination_complexity(n, k, r)
+
+
+@lru_cache(maxsize=256)
+def _bounded_m4ri_r(n: int, k: int, mem=math.inf) -> int:
+    """Exactly reproduce the 2.1.1 search while pruning provably worse r.
+
+    For 0 < r < n-k the upstream integer Gaussian cost is at least 2**r.
+    Once this lower bound reaches the best cost, no remaining candidate can
+    improve it. Keep upstream's strict log2 comparison (including ties) and
+    its check of the *selected* r against mem, rather than changing its model.
+    """
+    selected, best_log, best_cost = 0, math.inf, None
+    if not selected < mem:
+        return selected
+    for candidate in range(n - k):
+        if best_cost is not None and (1 << candidate) >= best_cost:
+            break
+        cost = _m4ri_cost(n, k, candidate)
+        log_cost = math.log2(cost)
+        if best_log > log_cost and selected < mem:
+            selected, best_log, best_cost = candidate, log_cost, cost
+    return selected
+
+
+def _seed_bounded_m4ri(algorithm) -> bool:
+    """Use the reviewed shortcut only for binary Prange/Stern in 2.1.1."""
+    if type(algorithm).__name__ not in ("Prange", "Stern"):
+        return False
+    try:
+        if metadata.version("cryptographic_estimators") != "2.1.1":
+            return False
+    except metadata.PackageNotFoundError:
+        return False
+    binary = importlib.import_module("cryptographic_estimators.SDEstimator")
+    if not isinstance(algorithm, binary.SDAlgorithm):
+        return False
+    n, k, _ = algorithm.problem.get_parameters()
+    mem = algorithm.problem.memory_bound - math.log2(n - k)
+    r = _bounded_m4ri_r(n, k, mem)
+    base = importlib.import_module("cryptographic_estimators.base_algorithm")
+    # SDAlgorithm.set_parameters also disables adaptive ranges for p and l.
+    # Its base implementation preserves that upstream search behavior.
+    base.BaseAlgorithm.set_parameters(algorithm, {"r": r})
+    return True
 
 
 def _json_value(value):
@@ -215,6 +265,11 @@ class ClassicalModel:
         if len(algorithms) != 1 or type(algorithms[0]).__name__ != name:
             raise RuntimeError("Upstream algorithm selection did not match the requested algorithm.")
         algorithm = algorithms[0]
+        if family == "SDEstimator" and _seed_bounded_m4ri(algorithm):
+            details["gaussian_elimination_search"] = (
+                "exact bounded equivalent of upstream 2.1.1 _optimize_m4ri; "
+                "other parameter ranges remain adaptive"
+            )
         time = algorithm.time_complexity()
         memory = algorithm.memory_complexity()
         optimized = _json_value(algorithm.get_optimal_parameters_dict())

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from .models import AttackInstance, Estimate, Options
+from .models import AttackInstance, Estimate, Options, QUANTUM_ALGORITHMS
 
 
 class QuantumModel:
     """Dispatch each requested candidate with the complete recovery instance."""
 
     name = "quantum"
-    algorithms = ("QPrange", "QSS", "QMMT+")
+    algorithms = QUANTUM_ALGORITHMS
 
     def estimate(self, instance: AttackInstance, options: Options) -> list[Estimate]:
         names = options.quantum_algorithms

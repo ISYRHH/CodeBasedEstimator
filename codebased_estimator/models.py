@@ -8,6 +8,9 @@ from numbers import Real
 from typing import Any, Optional, Protocol
 
 
+QUANTUM_ALGORITHMS = ("QPrange", "QSS", "QMMT+")
+
+
 def _nonnegative(value: float, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a finite nonnegative number")
@@ -129,10 +132,14 @@ class AttackInstance:
 
 @dataclass(frozen=True)
 class Options:
-    """Independent selections: None means all classical, () disables a family."""
+    """Default to all upstream classical and registered quantum candidates.
+
+    None selects each problem family's upstream classical defaults; an empty
+    tuple explicitly disables either family.
+    """
 
     classical_algorithms: Optional[tuple[str, ...]] = None
-    quantum_algorithms: tuple[str, ...] = ()
+    quantum_algorithms: tuple[str, ...] = QUANTUM_ALGORITHMS
     memory_bound_log2_bits: Optional[float] = None
 
     def __post_init__(self):
