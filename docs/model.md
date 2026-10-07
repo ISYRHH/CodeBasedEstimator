@@ -95,13 +95,17 @@ $$
 
 原始报告保留 `cfp`／`qccf` 类型、标签及 `targets`。`metadata.doom.model="ce_nsolutions"`、`metadata.doom.cost_model="ce-qccf-nsolutions-v1"` 标识这一路线，`effective_log2_solutions` 记录实际传入的 $\log_2M$。适配实现见 [经典后端](../codebased_estimator/backend.py)。
 
-这是通用 SD 的多解成本代理，尚未实现专门的零 syndrome 非零码字搜索成本。特别是，Prange 的 $p=0$ 分支在零 syndrome 下会退化为零码字；表示法中的自身碰撞及其排除费用也未重新建模。因此 CE 返回的有限结果表示该代理的成本，不证明对应参数能按相同成本找到非零码字。量子 QCCF 支持范围不变。
+这是通用 SD 的多解成本代理，尚未实现专门的零 syndrome 非零码字搜索成本。特别是，经典 Prange 的 $p=0$ 分支在零 syndrome 下会退化为零码字；表示法中的自身碰撞及其排除费用也未重新建模。因此 CE 返回的有限结果表示该代理的成本，不证明对应参数能按相同成本找到非零码字。量子 QCCF 的处理见下文。
 
 ## 量子适用范围
 
-量子实现 QSS 和 QMMT+，面向随机满行秩矩阵下的普通二元、单目标、单解 SD：$He^{\mathsf T}=s$、$\operatorname{wt}(e)=w$，整数输入满足 $0<k<n$、$1\le w\le n-k$。非二元、Rank SD、多目标、多解、DOOM 和结构专用量子模型不在此范围。
+量子实现 QSS 和 QMMT+，面向随机满行秩矩阵下的普通二元、单目标 SD：$He^{\mathsf T}=s$、$\operatorname{wt}(e)=w$，整数输入满足 $0<k<n$、$1\le w\le n-k$。支持通过外层成功概率建模的多解，以及相同口径的 QCCF 非零码字成本代理。非二元、Rank SD、QCSD 多 syndrome 和其他结构专用量子模型不在此范围。
 
 普通 SD 中 `log2_solutions=0` 指定单解；省略或 `null` 时，量子仍按单解处理，经典使用上游默认解数。比较同一单解问题时应显式指定 `0`。内置 Hamming 路线采用普通 SD 近似，不计结构或 DOOM 加速。
+
+显式 `log2_solutions=s` 表示 $M=2^s$ 个可接受解，取任意一个即成功，语义与 CE 的 `nsolutions` 一致。CLI 的 `estimate --log2-solutions s`（别名 `--nsolutions s`）覆盖该字段。解数必须是有限、非负的对数；不会再叠加 CE 的默认期望解数。
+
+QCCF 使用同一 `cfp`／`qccf`、`doom:qccf`、`targets=M` 接口，在优化前设置 $s=\log_2M$，保留原实例类型和数量，不额外叠加多目标或最终时间折扣。输入必须省略 `log2_solutions`。量子 QCCF 排除 $p=0$ 直接分支，因为零 syndrome 与尾部满列秩会使该分支仅得到零码字；其余候选仍按通用 SD 代理定价。轨道相关性、零 syndrome 下自身碰撞及其排除费用未完整建模，因此结果不是专用非零码字搜索复杂度证明。`QPrange` 仍未实现。
 
 量子仅估计时间，不估计内存，也不使用经典内存上限筛选参数。一次长度至多为 $n$ 的向量操作归一计为 1，重复预算乘 $n$ 转为位操作；输出 `time_log2` 的单位为 `quantum_bit_operations`。模型假设抽象相干访问，固定成功率放大及正反算的常数因子统一归一化，不能据此推断实际门数或设备运行时间。
 
@@ -140,6 +144,17 @@ $$
 
 空乘积为 1；$b=0$ 时 $\sigma=1$。表示收益已计入 $\sigma$ 和过滤划分，不再额外乘 $R$ 加速或 $2^{b/2}$ 费用。将集合平均成功比例代入时间公式属于本模型假设，不给出逐矩阵或随机码平均运行时间上界。
 
+多解使用 `independent-solution-union-v1` 外层概率代理。令 $x=P\sigma$，则
+
+$$
+P_{\rm eff,M}=\rho_\ell\left[1-(1-x)^M\right],\qquad
+\lambda=Mx.
+$$
+
+所有解共享的满秩条件 $\rho_\ell$ 留在并集概率之外。概率在对数域计算，支持极小 $x$ 和很大的对数解数；$M=1$ 保留原有计算结果。$\lambda\ll1$ 时 $P_{\rm eff,M}\approx M P_{\rm eff,1}$，重复预算约缩小 $\sqrt M$，一次性 $T_0$ 不缩小；饱和上限是 $\rho_\ell$。不同解的命中独立性是额外的启发式假设，不能从表示存活的二阶矩代理推出。
+
+内层过滤搜索及游走预算保持不变，不把全局解数再次乘入 $\varepsilon$。这适合外层命中稀疏的近似；密集多解可能还有未计入的内层收益。每个候选参数点先使用新概率计价，再优化 $\ell,p,d,u,a,b$；多解时枚举可行整数过滤划分 $b$，不沿用单解的驻点公式。`cost_breakdown` 记录 `log2_solutions`、`log2_P_eff_single`、`log2_q_single`、`log2_outer_occupancy`、`log2_q_multi` 和 `log2_P_eff_model`，用于检查占用率与饱和。
+
 ## 列表和量子游走预算
 
 四张游走子列表各含 $u$ 个叶子。定义有序动态索引深度 $L(z)=\lceil\log_2(2+z)\rceil$，以及 CE 的静态有序合并预算：
@@ -174,7 +189,7 @@ $g$ 包含定重支撑生成及线性像；删除旧叶复用缓存，更新的�
 
 $$
 \mathcal Q=S+\varepsilon^{-1/2}(\delta^{-1/2}U+C),\qquad
-T^{\rm bit}=T_0+\frac{n}{\sqrt{P_{\rm eff}}}\left[G+2^{a/2}\mathcal Q\right],\qquad
+T^{\rm bit}=T_0+\frac{n}{\sqrt{P_{\rm eff,M}}}\left[G+2^{a/2}\mathcal Q\right],\qquad
 T_0=(q+1)^2(t+1)+n(m+1).
 $$
 
@@ -216,11 +231,11 @@ P_{\rm dir}=\binom r{w-p}/\binom nw,\qquad
 T_{\rm dir}^{\rm bit}=n(m+1)+\frac{n}{\sqrt{P_{\rm dir}\rho_\ell}}(G+1+p).
 $$
 
-直接分支仍满足 $0\le\ell\le m$、$p\le w$、$0\le w-p\le r$。最终比较直接、完整列表和游走分支。
+上式给出直接分支的单解成本；多解时同样将 $P_{\rm dir}\rho_\ell$ 替换为 $\rho_\ell[1-(1-P_{\rm dir})^M]$。直接分支仍满足 $0\le\ell\le m$、$p\le w$、$0\le w-p\le r$；QCCF 额外排除 $p=0$。最终比较可行的直接、完整列表和游走分支。
 
 $n\le16$ 时穷举上述模型参数域；较大实例采用确定性多起点、对数域细化和有预算的整数边界搜索，保留已找到的最好候选。预算耗尽或局部停止不证明搜索收敛、剩余误差或全局最优；M4RI 块宽的完整优化不改变这一限制。
 
-结果元数据记录成本版本、矩阵配置、搜索版本、参数和停止信息。`cost_breakdown` 中成本项通常为向量操作的 $\log_2$，`T0` 为位操作的 $\log_2$，概率和列表大小也在对数域；零输出数或零费用用 `null` 表示。`evaluate_parameters` 可独立重放参数点。
+结果元数据记录成本版本、外层概率模型、有效对数解数、矩阵配置、搜索版本、参数和停止信息。`cost_breakdown` 中成本项通常为向量操作的 $\log_2$，`T0` 为位操作的 $\log_2$，概率和列表大小也在对数域；零输出数或零费用用 `null` 表示。`evaluate_parameters` 可独立重放参数点；重放时须传入相同的 `log2_solutions`、`matrix_profile`，QCCF 还须指定 `codeword_finding=True`。
 
 ## 实现与来源
 

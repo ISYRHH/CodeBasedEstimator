@@ -10,7 +10,7 @@ The evaluator is independent of CryptographicEstimators and of the optimizer.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from math import ceil, comb, floor, fsum, inf, isqrt, lgamma, log, log1p, log2
+from math import ceil, comb, expm1, floor, fsum, inf, isfinite, isqrt, lgamma, log, log1p, log2
 from typing import Any, Optional
 
 from .list_costs import ce_ordered_merge_cost, setup_list_sizes
@@ -19,6 +19,7 @@ from .quantum_search import SEARCH_VERSION, refine_candidates
 
 
 COST_MODEL = "ka17-ce-ordered-average-v2"
+OUTER_PROBABILITY_MODEL = "independent-solution-union-v1"
 _ALGORITHMS = ("QSS", "QMMT+")
 _LN2 = log(2)
 
@@ -75,10 +76,51 @@ def _validate(n: int, k: int, w: int, algorithm: str) -> None:
         raise ValueError("require integer parameters 0 < k < n and 1 <= w <= n-k")
 
 
+def _validate_solutions(log2_solutions: float, codeword_finding: bool) -> None:
+    try:
+        valid = (not isinstance(log2_solutions, bool)
+                 and isinstance(log2_solutions, (int, float))
+                 and isfinite(log2_solutions) and log2_solutions >= 0)
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError("log2_solutions must be finite and nonnegative")
+    if type(codeword_finding) is not bool:
+        raise ValueError("codeword_finding must be a boolean")
+
+
+def _log_solution_union(log2_q: float, log2_solutions: float) -> float:
+    """Log2(1-(1-q)**M), without materializing M or an underflowing q.
+
+    The hazard h=-log(1-q) gives union=1-exp(-M*h). Below 2**-54,
+    replacing -log(1-q) by q (and 1-exp(-x) by x) loses less than a
+    binary64 unit of relative precision. The exact M=1 path is retained.
+    """
+    if log2_solutions == 0 or log2_q in (-inf, 0.0):
+        return log2_q
+    if log2_q < -54:
+        log2_hazard = log2_q
+    else:
+        q = 2.0 ** log2_q
+        if q == 1.0:
+            return 0.0
+        log2_hazard = log2(-log1p(-q))
+    log2_exponent = log2_solutions + log2_hazard
+    if log2_exponent < -54:
+        return log2_exponent
+    if log2_exponent > 10:
+        return 0.0
+    return log2(-expm1(-(2.0 ** log2_exponent)))
+
+
 class _Model:
     def __init__(self, n: int, k: int, w: int, algorithm: str,
-                 matrix_profile: str = DEFAULT_MATRIX_PROFILE):
+                 matrix_profile: str = DEFAULT_MATRIX_PROFILE, *,
+                 log2_solutions: float = 0.0, codeword_finding: bool = False):
         _validate(n, k, w, algorithm)
+        _validate_solutions(log2_solutions, codeword_finding)
+        self.log2_solutions = log2_solutions
+        self.codeword_finding = codeword_finding
         self.matrix_profile = validate_profile(matrix_profile)
         self.n, self.k, self.w, self.algorithm = n, k, w, algorithm
         self.m = n - k
@@ -92,6 +134,17 @@ class _Model:
             tail[j] = tail[j + 1] + log1p(-2.0 ** (-j)) / _LN2
         self.rank_tail = tail
         self.shape_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    def probability(self, log2_P, log2_rho, log2_sigma=0.0):
+        """Independent-solution proxy; the common rank event stays outside."""
+        single = log2_P + log2_rho + log2_sigma
+        q = log2_P + log2_sigma
+        union = _log_solution_union(q, self.log2_solutions)
+        effective = single if self.log2_solutions == 0 else log2_rho + union
+        return dict(log2_solutions=self.log2_solutions,
+                    log2_P_eff_single=single, log2_q_single=q,
+                    log2_outer_occupancy=self.log2_solutions + q,
+                    log2_q_multi=union, log2_P_eff_model=effective)
 
     def rho(self, ell: int) -> float:
         def tail(j):
@@ -133,17 +186,22 @@ class _Model:
         return shape
 
     def direct(self, ell: int, p: int) -> Optional[QuantumCost]:
+        # With zero syndrome and a full-column-rank tail, e'=0 recovers only
+        # the forbidden zero codeword. This family cannot find a nonzero word.
+        if self.codeword_finding and p == 0:
+            return None
         K, r = self.k + ell, self.m - ell
         if not (0 <= ell <= self.m and p in (0, K) and 0 <= self.w - p <= r):
             return None
         lp = min(0.0, _logcomb(r, self.w - p) - self.log_nw)
         lrho, lg = self.rho(ell), self.gauss(ell)
         lc, lt0 = log2(1 + p), log2(self.n * (self.m + 1))
-        time = _logsum(lt0, self.log_n - (lp + lrho) / 2 + _logsum(lg, lc))
+        probability = self.probability(lp, lrho)
+        time = _logsum(lt0, self.log_n - probability["log2_P_eff_model"] / 2 + _logsum(lg, lc))
         return QuantumCost(time, dict(ell=ell, p=p, d=0, u=1, a=0, b=0, branch="direct"),
                            dict(log2_P=lp, log2_rho=lrho, log2_sigma=0.0,
                                 log2_G=lg, log2_Q=lc, log2_T0=lt0,
-                                log2_direct_check=lc, log2_P_eff_model=lp + lrho))
+                                log2_direct_check=lc, **probability))
 
     def walk_budget(self, sh: dict[str, Any], ell: int, u: int, f: int) -> dict[str, Optional[float]]:
         lu = log2(u)
@@ -190,12 +248,13 @@ class _Model:
     def finish(self, sh, details, ell, p, d, u, a, b) -> QuantumCost:
         # log2(R/(R+2^b-1)); use integer counts to preserve b=0 exactly.
         logsigma = 0.0 if b == 0 else -log1p(((1 << b) - 1) / sh["R"]) / _LN2
-        lp = sh["log2_P"] + sh["log2_rho"] + logsigma
+        probability = self.probability(sh["log2_P"], sh["log2_rho"], logsigma)
+        lp = probability["log2_P_eff_model"]
         time = _logsum(sh["log2_T0"], self.log_n - lp / 2 +
                        _logsum(sh["log2_G"], a / 2 + details["log2_Q"]))
         return QuantumCost(time, dict(ell=ell, p=p, d=d, u=u, a=a, b=b,
                                       branch="full_list" if u == sh["V"] else "walk"),
-                           dict(details, log2_sigma=logsigma, log2_P_eff_model=lp))
+                           dict(details, log2_sigma=logsigma, **probability))
 
     def evaluate(self, *, ell: int, p: int, d: int = 0, u: int = 1,
                  a: int = 0, b: int = 0) -> Optional[QuantumCost]:
@@ -224,7 +283,9 @@ class _Model:
 def evaluate_parameters(n: int, k: int, w: int, algorithm: str, *, ell: int,
                         p: int, d: int = 0, u: int = 1, a: int = 0,
                         b: int = 0,
-                        matrix_profile: str = DEFAULT_MATRIX_PROFILE) -> Optional[QuantumCost]:
+                        matrix_profile: str = DEFAULT_MATRIX_PROFILE,
+                        log2_solutions: float = 0.0,
+                        codeword_finding: bool = False) -> Optional[QuantumCost]:
     """Evaluate a specified integer point; infeasible points return None.
 
     Direct candidates are checked before leaf divisibility constraints. This
@@ -232,8 +293,12 @@ def evaluate_parameters(n: int, k: int, w: int, algorithm: str, *, ell: int,
     domain, including complete lists and arbitrary integer sublist sizes.
     The selected matrix profile deterministically minimizes its block width;
     pass the same profile when replaying a result. The default remains v2.
+    Multiple solutions modify only the outer probability through an
+    independent-event union; inner walk budgets are unchanged. Codeword
+    finding excludes the p=0 direct family, which yields only the zero word.
     """
-    model = _Model(n, k, w, algorithm, matrix_profile)
+    model = _Model(n, k, w, algorithm, matrix_profile,
+                   log2_solutions=log2_solutions, codeword_finding=codeword_finding)
     value = model.evaluate(ell=ell, p=p, d=d, u=u, a=a, b=b)
     return _with_matrix_metadata(value, n, k, matrix_profile)
 
@@ -265,17 +330,22 @@ def _grid(limit: int) -> list[int]:
 
 
 def _optimize(n: int, k: int, w: int, algorithm: str,
-              matrix_profile: str = DEFAULT_MATRIX_PROFILE) -> Optional[QuantumCost]:
+              matrix_profile: str = DEFAULT_MATRIX_PROFILE, *,
+              log2_solutions: float = 0.0,
+              codeword_finding: bool = False) -> Optional[QuantumCost]:
     """Exhaustive for n<=16; otherwise a deterministic multistart heuristic.
 
     Structural coordinates are ell, p/4 and d/2. Inner searches vary log2(u)
-    and f; their endpoints include full lists. The integer split b is optimized
-    analytically, then both neighboring integers and endpoints are evaluated.
+    and f; their endpoints include full lists. For one solution the integer
+    split b uses the analytic stationary point and neighboring integers. For
+    multiple solutions every feasible b is evaluated because saturation
+    changes that stationary equation.
     A separately versioned, bounded integer-boundary pass refines the original
     large-instance result without changing the cost model or discarding it.
     No optimum over the full large-instance domain is claimed.
     """
-    model = _Model(n, k, w, algorithm, matrix_profile)
+    model = _Model(n, k, w, algorithm, matrix_profile,
+                   log2_solutions=log2_solutions, codeword_finding=codeword_finding)
     m = n - k
     evaluated = 0
     best: Optional[QuantumCost] = None
@@ -290,6 +360,8 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
 
     # The unique-candidate family is independent of the leaf domain.
     for endpoint in (False, True):
+        if codeword_finding and not endpoint:
+            continue
         upper = min(m, w - k) if endpoint else m - w
         if upper < 0:
             continue
@@ -308,7 +380,7 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
                         for ell in (current.parameters["ell"] - step, current.parameters["ell"] + step):
                             if 0 <= ell <= upper:
                                 c = consider(model.direct(ell, k + ell if endpoint else 0))
-                                if c.time_log2 < current.time_log2:
+                                if c is not None and c.time_log2 < current.time_log2:
                                     current = c
                         if current is previous:
                             break
@@ -324,7 +396,7 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
         bmax = min(f, sh["R"].bit_length() - 1)
         if bmax == 0:
             choices = (0,)
-        elif complete:
+        elif complete or log2_solutions > 0:
             choices = range(bmax + 1)
         else:
             # With H=2^(f/2) Q, minimize sqrt(R-1+2^b)(G+H 2^(-b/2)).
@@ -356,7 +428,9 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
                  + _logcomb(r, w - p) - model.log_nw)
         upper_x = min(lv - 1, ell / 2)
         qbound = min(lv, max(.8 * lv, 2 * lv - 1.5 * upper_x))
-        lower = model.log_n - (lp + model.rho(ell)) / 2 + qbound
+        # sigma<=1 makes union(P) an upper bound on success for every b.
+        # Keeping rho outside the union also preserves its common-event cap.
+        lower = model.log_n - (_log_solution_union(lp, log2_solutions) + model.rho(ell)) / 2 + qbound
         if not complete and best is not None and lower > best.time_log2 + 1e-6:
             shape_results[key] = None
             return None
@@ -499,7 +573,7 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
                   parameter_domain="balanced Ka17 family with direct and full-list branches",
                   ell_range=[0, m], p_range=[0, min(w, n)],
                   inner_search="integer u and f" if complete else "baseline log2(u)/f search, then bounded integer-boundary refinement",
-                  filter_split="enumerated" if complete else "analytic stationary point and adjacent integers",
+                  filter_split="enumerated" if complete or log2_solutions > 0 else "analytic stationary point and adjacent integers",
                   structural_seed_grid="all integers" if complete else "small values, dyadic offsets from both endpoints, and eighths of each structural axis",
                   refinement_starts=0 if complete else 4,
                   evaluations_include_revisits=True,
@@ -508,25 +582,90 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
     return replace(best, search=search)
 
 
+def _search_with_solution_retention(n, k, w, algorithm, matrix_profile,
+                                    log2_solutions, codeword_finding):
+    # Omit default kwargs to preserve the legacy callable/search contract.
+    options = {"codeword_finding": True} if codeword_finding else {}
+    if log2_solutions:
+        options["log2_solutions"] = log2_solutions
+    candidate = _optimize(n, k, w, algorithm, matrix_profile, **options)
+    if log2_solutions == 0:
+        return candidate
+    single = _optimize(n, k, w, algorithm, matrix_profile,
+                       **({"codeword_finding": True} if codeword_finding else {}))
+    retained = None
+    replay_evaluations = 0
+    if single is not None:
+        model = _Model(n, k, w, algorithm, matrix_profile,
+                       log2_solutions=log2_solutions, codeword_finding=codeword_finding)
+        par = single.parameters
+        if par["branch"] == "direct":
+            retained = model.direct(par["ell"], par["p"])
+            replay_evaluations = 1
+        else:
+            ell, p, d, u = (par[key] for key in ("ell", "p", "d", "u"))
+            f = par["a"] + par["b"]
+            sh = model.shape(ell, p, d)
+            details = model.walk_budget(sh, ell, u, f)
+            # The single-solution stationary b need not minimize the union
+            # model. Retain the original point and optimize its entire split.
+            replay_evaluations = min(f, sh["R"].bit_length() - 1) + 1
+            retained = min((model.finish(sh, details, ell, p, d, u, f - b, b)
+                            for b in range(replay_evaluations)), key=lambda c: c.time_log2)
+        retained = _with_matrix_metadata(retained, n, k, matrix_profile)
+    available = [value for value in (retained, candidate) if value is not None]
+    if not available:
+        return None
+    selected = min(available, key=lambda value: value.time_log2)
+    search = dict(candidate.search if candidate is not None else single.search)
+    single_evaluations = single.search["evaluated_points"] if single is not None else 0
+    search.update(
+        evaluated_points=(candidate.search["evaluated_points"] if candidate else 0)
+                         + single_evaluations + replay_evaluations,
+        single_solution_retention=dict(
+            applied=retained is not None,
+            single_time_log2=single.time_log2 if single is not None else None,
+            single_parameters=dict(single.parameters) if single is not None else None,
+            replayed_parameters=dict(retained.parameters) if retained is not None else None,
+            replayed_time_log2=retained.time_log2 if retained is not None else None,
+            multi_search_time_log2=candidate.time_log2 if candidate is not None else None,
+            selected_from="single_replay" if selected is retained else "multi_search",
+            single_search_evaluated_points=single_evaluations,
+            replay_cost_evaluations=replay_evaluations,
+        ),
+    )
+    if candidate is None:
+        search["global_optimum"] = False
+    return replace(selected, search=search)
+
+
 def optimize(n: int, k: int, w: int, algorithm: str, *,
-             matrix_profile: str = DEFAULT_MATRIX_PROFILE) -> Optional[QuantumCost]:
-    """Optimize a versioned matrix profile and retain the legacy candidate.
+             matrix_profile: str = DEFAULT_MATRIX_PROFILE,
+             log2_solutions: float = 0.0,
+             codeword_finding: bool = False) -> Optional[QuantumCost]:
+    """Optimize a versioned profile/probability model and retain baselines.
 
     The default follows the original v2 search unchanged. An opt-in profile
     reruns the same search with its new G, then replays the v2 winner under
     that profile. Keeping both candidates prevents changed heuristic paths
     from worsening the legacy result. Block-width optimization is complete;
     the large ISD parameter search remains the accepted heuristic.
+    Multi-solution searches also retain the single-solution winner after
+    replaying its cost and reoptimizing its filter split under the union model.
     """
     validate_profile(matrix_profile)
-    candidate = _optimize(n, k, w, algorithm, matrix_profile)
+    _validate_solutions(log2_solutions, codeword_finding)
+    candidate = _search_with_solution_retention(
+        n, k, w, algorithm, matrix_profile, log2_solutions, codeword_finding)
     if matrix_profile == DEFAULT_MATRIX_PROFILE:
         return candidate
-    legacy = _optimize(n, k, w, algorithm)
+    legacy = _search_with_solution_retention(
+        n, k, w, algorithm, DEFAULT_MATRIX_PROFILE, log2_solutions, codeword_finding)
     retained = None
     if legacy is not None:
         retained = evaluate_parameters(
             n, k, w, algorithm, matrix_profile=matrix_profile,
+            log2_solutions=log2_solutions, codeword_finding=codeword_finding,
             **{key: value for key, value in legacy.parameters.items() if key != "branch"},
         )
     available = [value for value in (retained, candidate) if value is not None]

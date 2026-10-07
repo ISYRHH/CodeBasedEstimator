@@ -117,7 +117,9 @@ def main(argv=None) -> int:
                      help="DOOM tag: qcsd for syndrome targets, qccf for nonzero codewords; must match an existing tag")
     run.add_argument("--targets", type=int,
                      help="override usable count: syndromes for QCSD, distinct nonzero codewords for QCCF")
-    demo.set_defaults(doom=None, targets=None)
+    run.add_argument("--log2-solutions", "--nsolutions", dest="log2_solutions", type=float,
+                     help="override log2 of the acceptable solution count per syndrome (CE nsolutions); omit for QCCF")
+    demo.set_defaults(doom=None, targets=None, log2_solutions=None)
     hamming = commands.add_parser("hamming", help="evaluate local HammingSchemes parameter snapshots without DOOM/Unbalanced")
     hamming.add_argument("--schemes", nargs="+", choices=HAMMING_SCHEMES, help="default: all nine schemes")
     hamming.add_argument("--parameter-sets", nargs="+", help="exact IDs from --list; default: all sets of selected schemes")
@@ -126,7 +128,7 @@ def main(argv=None) -> int:
     hamming.add_argument("--all-classical", action="store_true", help="use all upstream classical algorithms per field (already the default)")
     hamming.add_argument("--details", action="store_true", help="print full per-algorithm tables")
     hamming.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
-    hamming.set_defaults(doom=None, targets=None)
+    hamming.set_defaults(doom=None, targets=None, log2_solutions=None)
     for command in (demo, run, hamming):
         command.add_argument("--classical-algorithms", nargs="*", help="classical names; default: all upstream candidates (demo uses a small selection); empty disables classical")
         command.add_argument("--quantum-algorithms", nargs="*", help="quantum names; default: all registered candidates (demo uses explicit selections); empty disables quantum")
@@ -192,6 +194,8 @@ def main(argv=None) -> int:
                 changes["tags"] = instance.tags if existing else (*instance.tags, tag)
             if args.targets is not None:
                 changes["targets"] = args.targets
+            if args.log2_solutions is not None:
+                changes["problem"] = replace(instance.problem, log2_solutions=args.log2_solutions)
             if changes:
                 instance = replace(instance, **changes)
             reports.append(estimate(instance, options=Options(

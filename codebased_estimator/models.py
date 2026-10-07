@@ -32,11 +32,12 @@ def _strings(values, name: str) -> tuple[str, ...]:
 class Problem:
     """sd: (n,k,w,q); rank_sd: (q,m,n,k,r).
 
-    cfp/qccf support the tagged classical solution-count proxy; other routes
+    cfp/qccf support tagged classical and quantum solution-count proxies; other routes
     for these problem kinds, and other kinds, require custom models.
 
     log2_solutions describes solutions of ONE syndrome, never distinct syndrome
-    targets. None preserves the SD backend's default; 0 means one solution.
+    targets. None preserves the classical SD backend's default and means one
+    solution for quantum models; 0 means one solution.
     Tagged QCCF instead supplies its codeword count through AttackInstance.targets.
     """
 
@@ -85,6 +86,8 @@ class AttackInstance:
       doom:qcsd -- targets counts usable syndrome targets under one matrix.
     Neither tag implies independence or a universal speedup. The built-in
     classical QCCF proxy maps its total usable codeword count to CE nsolutions;
+    the quantum QCCF proxy uses it in the outer success probability and excludes
+    the direct zero-codeword branch.
     QCSD targets remain separate from each syndrome's log2_solutions.
     """
 

@@ -41,14 +41,15 @@ def test_cli_defaults_to_all_upstream_classical_and_registered_quantum_algorithm
     }
     assert all(row["status"] == "computed" for row in classical)
     assert tuple(row["algorithm"] for row in quantum) == QuantumModel.algorithms
-    assert all(row["status"] == "not_implemented" and row["time_log2"] is None
-               and row["memory_log2"] is None for row in quantum)
+    assert quantum[0]["status"] == "not_implemented"
+    assert all(row["status"] == "computed" and row["time_log2"] is not None
+               and row["memory_log2"] is None for row in quantum[1:])
     assert record["options"]["classical_algorithms"] is None
     assert record["options"]["quantum_algorithms"] == list(QuantumModel.algorithms)
     assert set(record["backends"]) == {"classical", "quantum"}
     assert record["conclusions"]["classical"]["status"] == "computed"
-    assert record["conclusions"]["quantum"]["status"] == "unavailable"
-    assert record["conclusions"]["quantum"]["best"] == []
+    assert record["conclusions"]["quantum"]["status"] == "computed"
+    assert record["conclusions"]["quantum"]["best"]
 
 
 @pytest.mark.parametrize("disabled,enabled", [("classical", "quantum"), ("quantum", "classical")])
@@ -74,12 +75,13 @@ def test_cli_combines_independent_algorithm_lists_in_one_record(attack_file, cap
         ("quantum", "QPrange"), ("quantum", "QSS"), ("quantum", "QMMT+"),
     ]
     assert all(row["status"] == "computed" for row in rows[:2])
-    assert all(row["status"] == "not_implemented" for row in rows[2:])
+    assert rows[2]["status"] == "not_implemented"
+    assert all(row["status"] == "computed" for row in rows[3:])
     conclusions = records[0]["conclusions"]
     assert conclusions["classical"]["status"] == "computed"
     assert conclusions["classical"]["best"] == [min(rows[:2], key=lambda row: row["time_log2"])]
-    assert conclusions["quantum"]["status"] == "unavailable"
-    assert conclusions["quantum"]["best"] == []
+    assert conclusions["quantum"]["status"] == "computed"
+    assert conclusions["quantum"]["best"] == [min(rows[3:], key=lambda row: row["time_log2"])]
 
 
 def test_cli_prints_separate_classical_and_quantum_conclusions(attack_file, capsys):
@@ -89,7 +91,7 @@ def test_cli_prints_separate_classical_and_quantum_conclusions(attack_file, caps
     assert "Best classical: Prange | time=2^" in output
     assert "bit_operations; memory=2^" in output
     assert "bits; parameters=" in output
-    assert "Best quantum: -- (unavailable)" in output
+    assert "Best quantum: QSS | time=2^" in output
 
 
 def test_cli_doom_flags_preserve_solutions_and_algorithm_names(attack_file, capsys):
@@ -122,7 +124,7 @@ def test_cli_qccf_uses_ce_solution_counts_and_preserves_the_original_instance(at
     data["problem"].pop("log2_solutions")
     attack_file.write_text(json.dumps(data))
     assert main(["estimate", str(attack_file), "--classical-algorithms", "Prange", "Stern",
-                 "--quantum-algorithms", "QPrange", "--doom", "qccf",
+                 "--quantum-algorithms", "QPrange", "QSS", "QMMT+", "--doom", "qccf",
                  "--targets", "3", "--json"]) == 0
     record, = json.loads(capsys.readouterr().out)
     attack = record["instance"]
@@ -138,7 +140,45 @@ def test_cli_qccf_uses_ce_solution_counts_and_preserves_the_original_instance(at
         assert row["time_log2"] == pytest.approx(direct[row["algorithm"]].time_complexity())
         assert row["metadata"]["doom"]["model"] == "ce_nsolutions"
         assert row["metadata"]["effective_log2_solutions"] == log2(3)
-    assert quantum[0]["status"] == "not_applicable"
+    assert quantum[0]["status"] in ("not_applicable", "not_implemented")
+    for row in quantum[1:]:
+        assert row["status"] == "computed"
+        assert row["metadata"]["effective_log2_solutions"] == log2(3)
+        assert row["parameters"]["p"] > 0
+
+
+@pytest.mark.parametrize("flag", ("--log2-solutions", "--nsolutions"))
+def test_cli_solution_override_reaches_both_models(attack_file, capsys, flag):
+    assert main(["estimate", str(attack_file), flag, "3",
+                 "--classical-algorithms", "Prange", "--quantum-algorithms", "QSS", "--json"]) == 0
+    record, = json.loads(capsys.readouterr().out)
+    assert record["instance"]["problem"]["log2_solutions"] == 3
+    classical, quantum = record["results"]
+    expected = SDEstimator(n=40, k=20, w=4, nsolutions=3).prange.time_complexity()
+    assert classical["time_log2"] == pytest.approx(expected)
+    assert quantum["status"] == "computed"
+    assert quantum["metadata"]["effective_log2_solutions"] == 3
+    assert quantum["metadata"]["cost_breakdown"]["log2_solutions"] == 3
+
+
+@pytest.mark.parametrize("value", ("-1", "nan", "inf"))
+def test_cli_solution_override_rejects_invalid_counts(attack_file, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        main(["estimate", str(attack_file), "--nsolutions", value,
+              "--classical-algorithms", "--quantum-algorithms", "QSS"])
+    assert exc.value.code == 2
+    assert "log2_solutions" in capsys.readouterr().err
+
+
+def test_cli_qccf_does_not_double_count_a_solution_override(attack_file, capsys):
+    data = json.loads(attack_file.read_text())
+    data["problem"] = {"kind": "cfp", "parameters": {"n": 40, "k": 20, "w": 4}}
+    attack_file.write_text(json.dumps(data))
+    with pytest.raises(SystemExit) as exc:
+        main(["estimate", str(attack_file), "--doom", "qccf", "--targets", "8",
+              "--nsolutions", "3", "--classical-algorithms", "--quantum-algorithms", "QSS"])
+    assert exc.value.code == 2
+    assert "double counting" in capsys.readouterr().err
 
 
 def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys, quantum_cost):

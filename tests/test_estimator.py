@@ -228,9 +228,13 @@ def test_doom_is_instance_context_and_preserves_each_requested_algorithm(doom_ta
             assert row.time_log2 is not None and row.memory_log2 is not None
             assert row.metadata["doom"]["available_targets"] == targets
             continue
-        expected = "not_applicable" if doom_tag == "doom:qccf" and row.model == "quantum" else "not_implemented"
-        assert row.status == expected
-        assert row.time_log2 is None and row.memory_log2 is None
+        if doom_tag == "doom:qccf" and row.algorithm == "QMMT+":
+            assert row.status == "computed"
+            assert row.time_log2 is not None and row.memory_log2 is None
+            assert row.metadata["doom"]["available_targets"] == targets
+        else:
+            assert row.status == "not_implemented"
+            assert row.time_log2 is None and row.memory_log2 is None
         assert row.reason
 
 
@@ -400,7 +404,6 @@ def test_each_quantum_algorithm_is_optimized_with_its_original_parameters(monkey
 
 
 @pytest.mark.parametrize("problem,context,status", [
-    (Problem("sd", {"n": 40, "k": 20, "w": 4}, 1), {}, "not_implemented"),
     (Problem("sd", {"n": 40, "k": 20, "w": 4}, 0), {"targets": 2}, "not_implemented"),
     (Problem("sd", {"n": 40, "k": 20, "w": 4}, 0), {"tags": ("custom",)}, "not_implemented"),
     (Problem("sd", {"n": 40, "k": 20, "w": 4}, 0), {"structure": ("block weights",)}, "not_implemented"),

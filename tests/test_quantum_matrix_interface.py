@@ -86,7 +86,6 @@ def test_profile_is_routed_to_optimizer_and_identified_in_public_json(monkeypatc
 
 @pytest.mark.parametrize("changes", [
     {"tags": ("doom:qcsd",)}, {"targets": 2}, {"structure": ("quasi-cyclic",)},
-    {"problem": Problem("sd", {"n": 24, "k": 12, "w": 4}, 1)},
     {"problem": Problem("sd", {"n": 24, "k": 12, "w": 4, "q": 3}, 0)},
 ])
 def test_optional_profile_does_not_bypass_quantum_applicability(monkeypatch, changes):
