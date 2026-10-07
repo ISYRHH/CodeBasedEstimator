@@ -4,6 +4,7 @@ import csv
 import importlib
 import io
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -244,7 +245,7 @@ def test_cli_csv_has_numeric_costs_only_for_available_routes(capsys):
     assert set(records[0]) == {
         "scheme", "parameter_set", "goal", "n", "k", "w", "q", "model",
         "algorithm", "status", "time_log2", "memory_log2", "time_unit",
-        "memory_unit", "is_best", "reason",
+        "memory_unit", "is_best", "reason", "cost_model", "matrix_profile", "matrix_block_size",
     }
     keys = [row for row in records if row["goal"] == "key_recovery"]
     messages = [row for row in records if row["goal"] == "msg_recovery"]
@@ -297,6 +298,9 @@ def small_binary_hamming(monkeypatch):
         goal="msg_recovery", problem=Problem("sd", {"n": 40, "k": 20, "w": 4, "q": 2}, 0),
     )
     monkeypatch.setattr(cli, "hamming_instances", lambda **kwargs: [attack])
+    cost = SimpleNamespace(time_log2=19.5, parameters={"ell": 0, "p": 0},
+                           details={}, search={"method": "test fixture"})
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", lambda *args: cost)
     return attack
 
 
@@ -306,7 +310,7 @@ BINARY_CLASSICAL_ALGORITHMS = {
 }
 
 
-def test_cli_binary_default_computes_all_upstream_algorithms_and_keeps_quantum_placeholders(
+def test_cli_binary_default_computes_all_upstream_algorithms_and_quantum_time_estimates(
     small_binary_hamming, capsys,
 ):
     assert main(["hamming", "--json"]) == 0
@@ -317,13 +321,16 @@ def test_cli_binary_default_computes_all_upstream_algorithms_and_keeps_quantum_p
                and row["memory_log2"] > 0 for row in classical)
     quantum = [row for row in record["results"] if row["model"] == "quantum"]
     assert [row["algorithm"] for row in quantum] == ["QPrange", "QSS", "QMMT+"]
-    assert all(row["status"] == "not_implemented" and row["reason"] for row in quantum)
-    assert all(row["time_log2"] is None and row["memory_log2"] is None for row in quantum)
+    assert quantum[0]["status"] == "not_implemented" and quantum[0]["time_log2"] is None
+    assert all(row["status"] == "computed" and row["time_log2"] > 0 and row["reason"]
+               for row in quantum[1:])
+    assert all(row["memory_log2"] is None and row["memory_unit"] == "not_estimated"
+               for row in quantum[1:])
     assert record["conclusions"]["classical"]["status"] == "computed"
-    assert record["conclusions"]["quantum"]["status"] == "unavailable"
+    assert record["conclusions"]["quantum"]["status"] == "computed"
 
 
-def test_cli_default_text_shows_all_algorithms_and_pending_quantum_costs(small_binary_hamming, capsys):
+def test_cli_default_text_shows_all_algorithms_and_quantum_time_costs(small_binary_hamming, capsys):
     assert main(["hamming"]) == 0
     output = capsys.readouterr().out
     for name in BINARY_CLASSICAL_ALGORITHMS | {"QPrange", "QSS", "QMMT+"}:
@@ -331,7 +338,9 @@ def test_cli_default_text_shows_all_algorithms_and_pending_quantum_costs(small_b
     assert "not_implemented" in output
     assert "finite quantum costs and independent parameter optimization are pending" in output
     assert "Best classical:" in output
-    assert "Best quantum: -- (unavailable)" in output
+    assert "Best quantum: QSS | time=2^" in output
+    assert "Best quantum: QMMT+ | time=2^" in output
+    assert "memory=not estimated" in output
 
 
 @pytest.mark.parametrize("arguments,expected_classical,expected_quantum", [
@@ -399,6 +408,17 @@ def test_cli_csv_keeps_explicit_quantum_selection(small_binary_hamming, capsys):
     assert quantum["time_log2"] == quantum["memory_log2"] == ""
     assert quantum["is_best"] == "False"
     assert quantum["reason"]
+
+
+def test_cli_csv_declares_quantum_time_only_scope(small_binary_hamming, capsys):
+    assert main(["hamming", "--classical-algorithms", "--quantum-algorithms", "QSS",
+                 "--memory-bound", "0", "--csv"]) == 0
+    quantum, = csv.DictReader(io.StringIO(capsys.readouterr().out))
+    assert quantum["status"] == "computed" and quantum["is_best"] == "True"
+    assert float(quantum["time_log2"]) > 0
+    assert quantum["time_unit"] == "quantum_bit_operations"
+    assert quantum["memory_log2"] == "" and quantum["memory_unit"] == "not_estimated"
+    assert "memory bound is not applied" in quantum["reason"]
 
 
 def test_cli_quantum_request_automatically_prints_detailed_rows(capsys):

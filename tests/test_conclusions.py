@@ -1,6 +1,7 @@
 """Check scientific comparability and feasibility of reported minima."""
 
 import json
+from dataclasses import replace
 
 from codebased_estimator import AttackInstance, Conclusion, Estimate, Options, Problem, Report
 
@@ -123,3 +124,45 @@ def test_conclusions_serialize_as_strict_json_without_discarding_individual_resu
     assert serialized["conclusions"]["quantum"]["status"] == "unavailable"
     assert serialized["conclusions"]["quantum"]["best"] == []
     assert result.results == rows
+
+
+def test_explicit_time_only_quantum_results_compare_without_memory_constraints():
+    first = Estimate("QSS", "quantum", "computed", 15, None,
+                     time_unit="quantum_bit_operations", memory_unit="not_estimated",
+                     metadata={"resource_scope": "time_only"})
+    second = replace(first, algorithm="QMMT+")
+    result = report([first, second], Options(memory_bound_log2_bits=0))
+    conclusion = result.conclusions["quantum"]
+    assert conclusion.status == "computed"
+    assert conclusion.best == (first, second)
+    assert "memory bound is not applied" in conclusion.reason
+    assert "feasible memory" not in conclusion.reason
+    encoded = json.loads(json.dumps(result.to_dict(), allow_nan=False))
+    assert encoded["conclusions"]["quantum"]["best"][0]["memory_log2"] is None
+
+
+def test_time_only_exception_does_not_relax_other_result_validation():
+    valid = Estimate("QSS", "quantum", "computed", 15, None,
+                     time_unit="quantum_bit_operations", memory_unit="not_estimated",
+                     metadata={"resource_scope": "time_only"})
+    invalid = [
+        replace(valid, model="classical"),
+        replace(valid, metadata={}),
+        replace(valid, memory_unit="bits"),
+        replace(valid, status="not_implemented"),
+        replace(valid, time_log2=None),
+        replace(valid, time_log2=float("nan")),
+        replace(valid, time_log2=True),
+        replace(valid, time_unit="unspecified"),
+        replace(valid, memory_log2=10),
+    ]
+    result = report(invalid, Options(memory_bound_log2_bits=0)).conclusions
+    assert all(row.status == "unavailable" for row in result.values())
+
+
+def test_time_only_quantum_estimates_still_require_compatible_time_units():
+    quantum = Estimate("QSS", "quantum", "computed", 15, None,
+                       time_unit="quantum_bit_operations", memory_unit="not_estimated",
+                       metadata={"resource_scope": "time_only"})
+    other = Estimate("QPrange", "quantum", "computed", 10, 5, time_unit="logical_gates")
+    assert report([quantum, other]).conclusions["quantum"].status == "incomparable_units"

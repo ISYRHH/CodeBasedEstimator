@@ -13,13 +13,15 @@ from . import AttackInstance, DemoScheme, Options, estimate
 from .hamming import (DEFAULT_HAMMING_ALGORITHMS, HAMMING_SCHEMES,
                       hamming_catalogue, hamming_instances)
 from .models import QUANTUM_ALGORITHMS
+from .matrix_costs import DEFAULT_MATRIX_PROFILE, MATRIX_PROFILES
 
 
 def _csv_results(reports):
     """Keep every requested classical/quantum candidate, including placeholders."""
     fields = ("scheme", "parameter_set", "goal", "n", "k", "w", "q", "status",
               "model", "algorithm", "time_log2", "memory_log2", "time_unit",
-              "memory_unit", "is_best", "reason")
+              "memory_unit", "is_best", "reason", "cost_model", "matrix_profile",
+              "matrix_block_size")
     writer = csv.DictWriter(sys.stdout, fieldnames=fields)
     writer.writeheader()
     for report in reports:
@@ -34,6 +36,9 @@ def _csv_results(reports):
                 "time_log2": row.time_log2, "memory_log2": row.memory_log2,
                 "time_unit": row.time_unit, "memory_unit": row.memory_unit,
                 "is_best": row in conclusions[row.model].best, "reason": row.reason,
+                "cost_model": row.metadata.get("cost_model", ""),
+                "matrix_profile": row.metadata.get("matrix_profile", ""),
+                "matrix_block_size": row.metadata.get("matrix", {}).get("block_size", ""),
             })
 
 
@@ -73,19 +78,25 @@ def _table(reports):
         print(f"\n{i.name} | {i.goal} | {i.problem.kind} {i.problem.parameters}")
         print(f"  {i.route}")
         print(f"  tags={list(i.tags)}; targets={i.targets}")
+        if report.options.quantum_algorithms and report.options.quantum_matrix_profile != DEFAULT_MATRIX_PROFILE:
+            print(f"  Quantum matrix profile: {report.options.quantum_matrix_profile}")
         print(f"  {'algorithm':24} {'model':10} {'status':17} {'time':>9} {'memory':>9}  units (time / memory); parameters")
         for r in report.results:
             time = "--" if r.time_log2 is None else f"{r.time_log2:.3f}"
-            memory = "--" if r.memory_log2 is None else f"{r.memory_log2:.3f}"
+            memory = "not estimated" if r.is_time_only_quantum else (
+                "--" if r.memory_log2 is None else f"{r.memory_log2:.3f}"
+            )
             print(f"  {r.algorithm:24} {r.model:10} {r.status:17} {time:>9} {memory:>9}  {r.time_unit} / {r.memory_unit}; {r.parameters}")
             if r.reason:
                 print(f"    {r.reason}")
         for family, conclusion in report.conclusions.items():
             if conclusion.best:
                 for best in conclusion.best:
+                    memory = ("not estimated" if best.is_time_only_quantum else
+                              f"2^{best.memory_log2:.3f} {best.memory_unit}")
                     print(f"  Best {family}: {best.algorithm} | "
                           f"time=2^{best.time_log2:.3f} {best.time_unit}; "
-                          f"memory=2^{best.memory_log2:.3f} {best.memory_unit}; "
+                          f"memory={memory}; "
                           f"parameters={best.parameters}")
             else:
                 print(f"  Best {family}: -- ({conclusion.status})")
@@ -117,7 +128,10 @@ def main(argv=None) -> int:
     for command in (demo, run, hamming):
         command.add_argument("--classical-algorithms", nargs="*", help="classical names; default: all upstream candidates (demo uses a small selection); empty disables classical")
         command.add_argument("--quantum-algorithms", nargs="*", help="quantum names; default: all registered candidates (demo uses explicit selections); empty disables quantum")
-        command.add_argument("--memory-bound", type=float, help="maximum log2(memory in bits)")
+        command.add_argument("--quantum-matrix-profile", choices=MATRIX_PROFILES,
+                             default=DEFAULT_MATRIX_PROFILE,
+                             help="matrix cost profile for QSS/QMMT+; default: %(default)s")
+        command.add_argument("--memory-bound", type=float, help="maximum log2(memory in bits); not applied to time-only quantum estimates")
         output = command.add_mutually_exclusive_group()
         output.add_argument("--json", action="store_true", help="emit reproducible result records")
         if command is hamming:
@@ -182,6 +196,7 @@ def main(argv=None) -> int:
                 classical_algorithms=classical if args.classical_algorithms is None else args.classical_algorithms,
                 quantum_algorithms=quantum if args.quantum_algorithms is None else args.quantum_algorithms,
                 memory_bound_log2_bits=args.memory_bound,
+                quantum_matrix_profile=args.quantum_matrix_profile,
             )))
         if args.json:
             print(json.dumps([r.to_dict() for r in reports], indent=2, ensure_ascii=False, allow_nan=False))

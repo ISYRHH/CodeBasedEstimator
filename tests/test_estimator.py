@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from math import comb, log2
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,14 @@ from codebased_estimator import AttackInstance, Estimate, Options, Problem, esti
 
 def instance(problem, **kwargs):
     return AttackInstance("test route", "msg_recovery", problem, **kwargs)
+
+
+@pytest.fixture
+def quantum_cost(monkeypatch):
+    cost = SimpleNamespace(time_log2=19.5, parameters={"ell": 0, "p": 0},
+                           details={"G_log2": 8}, search={"method": "test fixture"})
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", lambda *args: cost)
+    return cost
 
 
 def upstream_algorithm(family, algorithm, parameters, **problem_options):
@@ -105,7 +114,7 @@ def test_zero_memory_bound_never_reports_a_feasible_estimate(problem, algorithm)
     json.dumps(report.to_dict(), allow_nan=False)
 
 
-def test_classical_and_requested_quantum_algorithms_share_one_report():
+def test_classical_and_requested_quantum_algorithms_share_one_report(quantum_cost):
     options = Options(classical_algorithms=("Prange", "Stern"),
                       quantum_algorithms=("QPrange", "QSS", "QMMT+"))
     report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 4}, 0)), options=options)
@@ -115,18 +124,45 @@ def test_classical_and_requested_quantum_algorithms_share_one_report():
     assert all(row.status == "computed" for row in classical)
     assert [row.algorithm for row in quantum] == ["QPrange", "QSS", "QMMT+"]
     assert set(report.backends) == {"classical", "quantum"}
-    for row in quantum:
-        assert row.status == "not_implemented"
-        assert row.time_log2 is None and row.memory_log2 is None
+    assert quantum[0].status == "not_implemented"
+    assert quantum[0].time_log2 is None
+    for row in quantum[1:]:
+        assert row.status == "computed"
+        assert row.time_log2 == quantum_cost.time_log2 and row.memory_log2 is None
+        assert row.time_unit == "quantum_bit_operations"
+        assert row.memory_unit == "not_estimated"
+        assert row.metadata["resource_scope"] == "time_only"
+        assert row.metadata["cost_breakdown"] == quantum_cost.details
+        assert row.metadata["search"] == quantum_cost.search
         assert row.reason
+    assert report.backends["quantum"]["implemented_algorithms"] == ["QSS", "QMMT+"]
     json.dumps(report.to_dict(), allow_nan=False)
+
+
+def test_ce_list_profile_and_zero_setup_outputs_survive_public_json(monkeypatch):
+    from codebased_estimator.quantum_costs import COST_MODEL, evaluate_parameters
+
+    point = evaluate_parameters(24, 12, 4, "QSS", ell=4, p=4, u=2, a=1)
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", lambda *args: point)
+    report = estimate(instance(Problem("sd", {"n": 24, "k": 12, "w": 4}, 0)),
+                      options=Options(classical_algorithms=("Prange",), quantum_algorithms=("QSS",)))
+    classical, quantum = report.results
+    upstream = upstream_algorithm("SD", "Prange", {"n": 24, "k": 12, "w": 4}, nsolutions=0)
+    assert classical.time_log2 == pytest.approx(upstream.time_complexity())
+    assert quantum.metadata["cost_model"] == COST_MODEL == "ka17-ce-ordered-average-v2"
+    assert quantum.metadata["list_cost_profile"]["name"] == "ce-2.1.1-ordered-v1"
+    serialized = json.loads(json.dumps(report.to_dict(), allow_nan=False))
+    breakdown = serialized["results"][1]["metadata"]["cost_breakdown"]
+    assert breakdown["log2_setup_output_count"] is None
+    assert breakdown["log2_setup_output_index"] is None
+    assert breakdown["log2_D2"] == -1  # Mean dynamic load remains positive.
 
 
 @pytest.mark.parametrize("classical,quantum,expected", [
     ((), ("QSS",), [("quantum", "QSS")]),
     (("Prange",), (), [("classical", "Prange")]),
 ])
-def test_empty_algorithm_tuples_disable_each_family_independently(classical, quantum, expected):
+def test_empty_algorithm_tuples_disable_each_family_independently(classical, quantum, expected, quantum_cost):
     report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 4}, 0)),
                       options=Options(classical_algorithms=classical, quantum_algorithms=quantum))
     assert [(row.model, row.algorithm) for row in report.results] == expected
@@ -138,7 +174,7 @@ def test_estimate_requires_at_least_one_enabled_family():
                  options=Options(classical_algorithms=(), quantum_algorithms=()))
 
 
-def test_defaults_include_all_upstream_classical_and_registered_quantum_algorithms():
+def test_defaults_include_all_upstream_classical_and_registered_quantum_algorithms(quantum_cost):
     from codebased_estimator.quantum import QuantumModel
 
     report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 4}, 0)))
@@ -158,15 +194,16 @@ def test_defaults_include_all_upstream_classical_and_registered_quantum_algorith
     assert report.options.classical_algorithms is None
     assert report.options.quantum_algorithms == QuantumModel.algorithms
     assert set(report.backends) == {"classical", "quantum"}
-    assert all(row.status == "not_implemented" and row.time_log2 is None
-               and row.memory_log2 is None and row.reason for row in quantum)
+    assert quantum[0].status == "not_implemented" and quantum[0].time_log2 is None
+    assert all(row.status == "computed" and row.time_log2 == quantum_cost.time_log2
+               and row.memory_log2 is None and row.reason for row in quantum[1:])
     minimum = min(row.time_log2 for row in classical)
     assert report.conclusions["classical"].status == "computed"
     assert report.conclusions["classical"].best == tuple(
         row for row in classical if row.time_log2 == minimum
     )
-    assert report.conclusions["quantum"].status == "unavailable"
-    assert report.conclusions["quantum"].best == ()
+    assert report.conclusions["quantum"].status == "computed"
+    assert report.conclusions["quantum"].best == tuple(quantum[1:])
     json.dumps(report.to_dict(), allow_nan=False)
 
 
@@ -318,15 +355,71 @@ class NoClassicalDependency(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, NoClassicalDependency())
 from codebased_estimator import AttackInstance, Options, Problem, estimate
 report = estimate(
-    AttackInstance('quantum-only', 'msg_recovery', Problem('sd', {'n': 40, 'k': 20, 'w': 4})),
-    options=Options(classical_algorithms=(), quantum_algorithms=('QPrange',)),
+    AttackInstance('quantum-only', 'msg_recovery', Problem('sd', {'n': 4, 'k': 3, 'w': 1})),
+    options=Options(classical_algorithms=(), quantum_algorithms=('QPrange', 'QSS', 'QMMT+')),
 )
-assert len(report.results) == 1
+assert len(report.results) == 3
 assert report.results[0].algorithm == 'QPrange'
 assert report.results[0].status == 'not_implemented'
+assert all(row.status == 'computed' for row in report.results[1:])
+assert report.conclusions['quantum'].status == 'computed'
 """
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("solutions", [None, 0])
+def test_quantum_single_solution_policy_and_memory_scope_are_explicit(solutions, quantum_cost):
+    report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 10}, solutions)),
+                      options=Options(classical_algorithms=(), quantum_algorithms=("QSS",),
+                                      memory_bound_log2_bits=0))
+    row, = report.results
+    assert row.status == "computed"
+    assert row.metadata["effective_log2_solutions"] == 0
+    assert row.metadata["memory_bound_applied"] is False
+    assert row.metadata["memory_bound_log2_bits"] == 0
+    assert ("null input" in row.metadata["solution_count_policy"]) == (solutions is None)
+    assert report.conclusions["quantum"].best == (row,)
+    assert "memory bound is not applied" in report.conclusions["quantum"].reason
+
+
+def test_each_quantum_algorithm_is_optimized_with_its_original_parameters(monkeypatch, quantum_cost):
+    calls = []
+    def capture(*args):
+        calls.append(args)
+        return quantum_cost
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", capture)
+    estimate(instance(Problem("sd", {"n": 64, "k": 31, "w": 6}, 0)),
+             options=Options(classical_algorithms=(), quantum_algorithms=("QMMT+", "QSS")))
+    assert calls == [(64, 31, 6, "QMMT+"), (64, 31, 6, "QSS")]
+
+
+@pytest.mark.parametrize("problem,context,status", [
+    (Problem("sd", {"n": 40, "k": 20, "w": 4}, 1), {}, "not_implemented"),
+    (Problem("sd", {"n": 40, "k": 20, "w": 4}, 0), {"targets": 2}, "not_implemented"),
+    (Problem("sd", {"n": 40, "k": 20, "w": 4}, 0), {"tags": ("custom",)}, "not_implemented"),
+    (Problem("sd", {"n": 40, "k": 20, "w": 4}, 0), {"structure": ("block weights",)}, "not_implemented"),
+    (Problem("sd", {"n": 40, "k": 20, "w": 4, "q": 3}, 0), {}, "not_applicable"),
+])
+def test_quantum_unsupported_context_never_reaches_optimizer(problem, context, status, monkeypatch):
+    def unexpected(*args):
+        pytest.fail("Unsupported context reached the quantum optimizer")
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", unexpected)
+    rows = estimate(instance(problem, **context), options=Options(
+        classical_algorithms=(), quantum_algorithms=("QSS", "QMMT+"))).results
+    assert all(row.status == status and row.time_log2 is None and row.reason for row in rows)
+
+
+def test_quantum_search_failure_remains_unavailable(monkeypatch):
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", lambda *args: None)
+    report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 4}, 0)),
+                      options=Options(classical_algorithms=(), quantum_algorithms=("QSS",)))
+    row, = report.results
+    assert row.status == "infeasible" and row.time_log2 is None
+    assert row.memory_log2 is None and row.memory_unit == "not_estimated"
+    assert "searched parameter domain" in row.reason
+    assert report.conclusions["quantum"].status == "unavailable"
+    assert "do not assess memory feasibility" in report.conclusions["quantum"].reason
 
 
 @pytest.mark.parametrize("doom_tag", ["doom:qccf", "doom:qcsd"])

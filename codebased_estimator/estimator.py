@@ -34,9 +34,18 @@ def estimate(
     if options.quantum_algorithms:
         if quantum_model is None:
             from .quantum import QuantumModel
+            from .matrix_costs import cost_model_for_profile
 
             quantum_model = QuantumModel()
-            backends["quantum"] = {"name": quantum_model.name, "implementation": "pending"}
+            backends["quantum"] = {
+                "name": quantum_model.name,
+                "implementation": "heuristic finite time estimates",
+                "cost_model": cost_model_for_profile(options.quantum_matrix_profile),
+                "matrix_profile": options.quantum_matrix_profile,
+                "implemented_algorithms": ["QSS", "QMMT+"],
+                "pending_algorithms": ["QPrange"],
+                "resource_scope": "time_only",
+            }
         else:
             backends["quantum"] = {"name": quantum_model.name}
         results.extend(quantum_model.estimate(instance, options))

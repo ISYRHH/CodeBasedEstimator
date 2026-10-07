@@ -1,6 +1,7 @@
 """Exercise CLI records, algorithm selection and DOOM context end to end."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,14 @@ def attack_file(tmp_path):
                     "log2_solutions": 2},
     }))
     return path
+
+
+@pytest.fixture
+def quantum_cost(monkeypatch):
+    cost = SimpleNamespace(time_log2=19.5, parameters={"ell": 0, "p": 0},
+                           details={}, search={"method": "test fixture"})
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", lambda *args: cost)
+    return cost
 
 
 def test_cli_defaults_to_all_upstream_classical_and_registered_quantum_algorithms(attack_file, capsys):
@@ -100,7 +109,7 @@ def test_cli_doom_flags_preserve_solutions_and_algorithm_names(attack_file, caps
                for row in records[0]["results"])
 
 
-def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys):
+def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys, quantum_cost):
     assert main(["demo", "--json"]) == 0
     records = json.loads(capsys.readouterr().out)
     names = [record["instance"]["name"] for record in records]
@@ -113,6 +122,21 @@ def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys):
         assert [row["algorithm"] for row in quantum] == ["QPrange", "QSS", "QMMT+"]
         assert any(row["model"] == "classical" and row["status"] == "computed"
                    for row in record["results"])
+
+
+def test_cli_prints_time_only_quantum_result_without_claiming_memory_feasibility(
+    attack_file, capsys, quantum_cost,
+):
+    data = json.loads(attack_file.read_text())
+    data["problem"]["log2_solutions"] = 0
+    attack_file.write_text(json.dumps(data))
+    assert main(["estimate", str(attack_file), "--classical-algorithms",
+                 "--quantum-algorithms", "QSS", "--memory-bound", "0"]) == 0
+    output = capsys.readouterr().out
+    assert "Best quantum: QSS | time=2^19.500 quantum_bit_operations" in output
+    assert "memory=not estimated" in output
+    assert "memory bound is not applied" in output
+    assert "feasible memory" not in output
 
 
 def test_cli_rejects_removed_model_flag(attack_file, capsys):
