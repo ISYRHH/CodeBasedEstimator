@@ -112,8 +112,14 @@ def test_cli_doom_flags_preserve_solutions_and_algorithm_names(attack_file, caps
     assert all(row["status"] == "computed" and row["time_log2"] is not None
                and row["metadata"]["doom"]["available_targets"] == 32
                for row in classical)
-    assert all(row["status"] == "not_implemented" and row["time_log2"] is None
-               for row in quantum)
+    assert quantum[0]["status"] == "not_implemented" and quantum[0]["time_log2"] is None
+    assert all(row["status"] == "computed" and row["time_log2"] is not None
+               and row["metadata"]["effective_log2_solutions"] == 2 for row in quantum[1:])
+    for row in quantum:
+        assert row["metadata"]["doom"]["model"] == "single_target_fallback"
+        assert row["metadata"]["doom"]["available_targets"] == 32
+        assert row["metadata"]["effective_targets"] == 1
+        assert row["metadata"]["effective_tags"] == []
 
 
 def test_cli_qccf_uses_ce_solution_counts_and_preserves_the_original_instance(attack_file, capsys):

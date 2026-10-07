@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 
 from .models import AttackInstance, Estimate, Options, Problem
+from .doom_fallback import single_target_fallback
 
 
 def _m4ri_cost(n: int, k: int, r: int) -> int:
@@ -270,10 +271,6 @@ class ClassicalModel:
                 },
             )
         if instance.tags == ("doom:qcsd",):
-            if family != "SDEstimator":
-                return self._unsupported(
-                    name, instance, "Classical QCSD target models require binary SD (q=2).",
-                )
             if instance.structure:
                 return self._unsupported(
                     name, instance,
@@ -285,6 +282,12 @@ class ClassicalModel:
             baseline = ClassicalModel.estimate_algorithm(
                 self, name, replace(instance, tags=(), targets=1), options,
             )
+            if family != "SDEstimator":
+                return single_target_fallback(
+                    baseline, instance,
+                    "Classical nonbinary QCSD DOOM is not implemented; "
+                    "using the single-target SD baseline without DOOM.",
+                )
             if name in ("Prange", "Stern", "Dumer", "BJMM"):
                 from .classical_doom import estimate_doom
 

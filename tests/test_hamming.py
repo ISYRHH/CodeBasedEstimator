@@ -1,9 +1,10 @@
-"""Check submission mappings and the limits of the preliminary SD baseline."""
+"""Check submission mappings, scheme-specific DOOM, and the original SD baseline."""
 
 import csv
 import importlib
 import io
 import json
+from math import log2
 from types import SimpleNamespace
 
 import pytest
@@ -85,34 +86,58 @@ EXPECTED = {
 }
 
 
+EXPECTED_TARGETS = {
+    "BIKE_MLThre": [12323, 24659, 40973, 150001],
+    "TRIKE": [10301, 15581, 22003, 35363, 69691, 114043],
+    "HARE": [20899, 52379, 104869, 173981],
+    "NSS-HQC": [29443, 54493, 122579, 217901],
+    "TriQ-KEM": [16301, 50363, 97651, 157627],
+    "Mito": [30746, 67654, 212522, 29242, 64522, 204874, 41012, 86092, 261172],
+    "QUBE": [13109, 25357, 41651, 82757, 135851],
+    "QCTM": [19, 19, 19],
+    "UVW-KEM": [1, 1, 1],
+}
+
+
+@pytest.mark.parametrize("doom", ["auto", "none"])
 @pytest.mark.parametrize("scheme,parameter_set,expected", [
     (scheme, parameter_set, expected)
     for scheme, parameters in EXPECTED.items()
     for parameter_set, expected in parameters.items()
 ])
-def test_every_submission_instance_has_the_reference_decoding_tuple(scheme, parameter_set, expected):
+def test_every_submission_instance_has_the_reference_decoding_tuple(scheme, parameter_set, expected, doom):
     n, key_k, key_w, msg_k, msg_w, q = expected
     for goal, k, w in (("key_recovery", key_k, key_w), ("msg_recovery", msg_k, msg_w)):
-        instances = HammingScheme(scheme).instances(parameter_set, goal)
+        instances = HammingScheme(scheme).instances(parameter_set, goal, doom=doom)
         assert len(instances) == 1
         attack = instances[0]
         assert (attack.scheme, attack.parameter_set, attack.goal) == (scheme, parameter_set, goal)
-        assert attack.targets == 1
-        assert attack.tags == attack.structure == ()
+        assert attack.structure == ()
         assert any("HammingISD.md" in ref for ref in attack.references)
         assert any("local/HammingSchemes/" in ref for ref in attack.references)
         assert any("Unbalanced" in note for note in attack.assumptions)
-        assert any("no DOOM" in note for note in attack.assumptions)
         if k is None:
             assert attack.problem.kind == "structural_key_recovery"
             assert attack.problem.parameters == {}
             assert attack.problem.log2_solutions is None
+            assert attack.targets == 1 and attack.tags == ()
         else:
-            assert attack.problem.kind == "sd"
             assert attack.problem.parameters == {"n": n, "k": k, "w": w, "q": q}
-            assert attack.problem.log2_solutions == 0
-            if goal == "key_recovery":
-                assert any("proxy" in note and "nonzero" in note for note in attack.assumptions)
+            if doom == "auto" and q == 2:
+                is_qccf = scheme in ("BIKE_MLThre", "TRIKE") and goal == "key_recovery"
+                assert attack.problem.kind == ("cfp" if is_qccf else "sd")
+                assert attack.tags == ("doom:qccf" if is_qccf else "doom:qcsd",)
+                assert attack.problem.log2_solutions == (None if is_qccf else 0)
+                expected_targets = dict(zip(EXPECTED[scheme], EXPECTED_TARGETS[scheme]))
+                assert attack.targets == expected_targets[parameter_set]
+                assert any("isd_parameter_mapping.md" in ref for ref in attack.references)
+            else:
+                assert attack.problem.kind == "sd"
+                assert attack.problem.log2_solutions == 0
+                assert attack.targets == 1 and attack.tags == ()
+                assert any("no DOOM" in note for note in attack.assumptions)
+                if goal == "key_recovery" and scheme in ("BIKE_MLThre", "TRIKE"):
+                    assert any("proxy" in note and "nonzero" in note for note in attack.assumptions)
 
 
 def test_catalogue_covers_all_sets_and_copies_nested_source_data():
@@ -149,15 +174,18 @@ def test_batch_filters_goals_and_removes_duplicate_scheme_selections():
     {"parameter_sets": ["QCTM-128"]},
     {"schemes": ["QCTM"], "parameter_sets": ["UVW-KEM-128"]},
     {"goal": "both_recovery"},
+    {"doom": "qcsd"},
+    {"doom": None},
 ])
 def test_invalid_batch_filters_fail_before_costing(arguments):
     with pytest.raises(ValueError):
         hamming_instances(**arguments)
 
 
+@pytest.mark.parametrize("doom", ["auto", "none"])
 @pytest.mark.parametrize("scheme,parameter_set", [("QCTM", "QCTM128"), ("UVW-KEM", "UVW-KEM-128")])
-def test_missing_key_reductions_remain_unavailable(scheme, parameter_set):
-    attack = HammingScheme(scheme).instances(parameter_set, "key_recovery")[0]
+def test_missing_key_reductions_remain_unavailable(scheme, parameter_set, doom):
+    attack = HammingScheme(scheme).instances(parameter_set, "key_recovery", doom=doom)[0]
     report = estimate(attack, options=Options(classical_algorithms=("Prange", "Stern"),
                                               quantum_algorithms=()))
     assert [row.algorithm for row in report.results] == ["Prange", "Stern"]
@@ -167,18 +195,21 @@ def test_missing_key_reductions_remain_unavailable(scheme, parameter_set):
     assert report.conclusions["classical"].best == ()
 
 
+@pytest.mark.parametrize("doom", ["auto", "none"])
 @pytest.mark.parametrize("scheme,parameter_set,goal,family", [
     ("BIKE_MLThre", "BIKE_MLThre-128", "key_recovery", "SD"),
+    ("TRIKE", "TRIKE-2", "key_recovery", "SD"),
     ("UVW-KEM", "UVW-KEM-128", "msg_recovery", "SDFq"),
 ])
-def test_real_baseline_prange_costs_match_direct_upstream(scheme, parameter_set, goal, family):
-    attack = HammingScheme(scheme).instances(parameter_set, goal)[0]
+def test_real_prange_costs_match_direct_upstream_solution_counts(scheme, parameter_set, goal, family, doom):
+    attack = HammingScheme(scheme).instances(parameter_set, goal, doom=doom)[0]
     report = estimate(attack, options=Options(classical_algorithms=("Prange",),
                                               quantum_algorithms=()))
     result = report.results[0]
     module = importlib.import_module(f"cryptographic_estimators.{family}Estimator")
     parameters = dict(attack.problem.parameters)
-    problem_options = {"nsolutions": 0}
+    solutions = log2(attack.targets) if attack.tags == ("doom:qccf",) else 0
+    problem_options = {"nsolutions": solutions}
     if family == "SD":
         parameters.pop("q")
     else:
@@ -190,8 +221,8 @@ def test_real_baseline_prange_costs_match_direct_upstream(scheme, parameter_set,
     assert result.time_log2 == pytest.approx(direct.time_complexity(), abs=1e-10)
     assert result.memory_log2 == pytest.approx(direct.memory_complexity(), abs=1e-10)
     assert result.parameters == direct.get_optimal_parameters_dict()
-    assert result.metadata["effective_log2_solutions"] == 0
-    assert result.metadata["targets"] == 1
+    assert result.metadata["effective_log2_solutions"] == solutions
+    assert result.metadata["targets"] == attack.targets
     assert result.time_unit == "bit_operations"
     assert result.memory_unit == "bits"
     json.dumps(report.to_dict(), allow_nan=False)
@@ -246,12 +277,18 @@ def test_cli_csv_has_numeric_costs_only_for_available_routes(capsys):
         "scheme", "parameter_set", "goal", "n", "k", "w", "q", "model",
         "algorithm", "status", "time_log2", "memory_log2", "time_unit",
         "memory_unit", "is_best", "reason", "cost_model", "matrix_profile", "matrix_block_size",
+        "problem_kind", "doom", "targets", "active_targets",
+        "effective_doom", "effective_targets",
     }
     keys = [row for row in records if row["goal"] == "key_recovery"]
     messages = [row for row in records if row["goal"] == "msg_recovery"]
     assert len(keys) == 4
     assert all(row["time_log2"] == row["memory_log2"] == row["n"] == "" for row in keys)
     assert all(row["reason"] and row["is_best"] == "False" for row in keys)
+    assert all(row["problem_kind"] == "structural_key_recovery" for row in keys)
+    assert all(row["problem_kind"] == "sd" for row in messages)
+    assert all(row["doom"] == row["active_targets"] == "" and row["targets"] == "1"
+               for row in records)
     classical = [row for row in messages if row["model"] == "classical"]
     assert {row["algorithm"] for row in classical} == {"Prange", "Stern", "LeeBrickell"}
     assert all(row["status"] == "computed" and row["q"] == "433" for row in classical)
@@ -367,6 +404,7 @@ def test_cli_explicit_algorithm_subsets_and_empty_family_flags(
     ["--parameter-sets", "QCTM128", "--all-classical", "--classical-algorithms", "Prange"],
     ["--parameter-sets", "QCTM128", "--list", "--csv"],
     ["--classical-algorithms", "--quantum-algorithms"],
+    ["--doom", "qcsd"],
 ])
 def test_cli_rejects_invalid_or_conflicting_selection(arguments, capsys):
     with pytest.raises(SystemExit) as error:
@@ -377,7 +415,7 @@ def test_cli_rejects_invalid_or_conflicting_selection(arguments, capsys):
 
 def test_cli_details_prints_mapping_and_submission_sources(capsys):
     assert main(["hamming", "--parameter-sets", "QCTM128", "--goal", "key_recovery",
-                 "--classical-algorithms", "Prange", "--details"]) == 0
+                 "--classical-algorithms", "Prange", "--details", "--no-brief"]) == 0
     output = capsys.readouterr().out
     assert "Source: local/notes/HammingISD.md" in output
     assert "Source: local/HammingSchemes/QCTM/" in output
@@ -430,4 +468,5 @@ def test_cli_quantum_request_automatically_prints_detailed_rows(capsys):
     assert "only binary syndrome-decoding routes" in output
     assert "Best classical: Prange" in output
     assert "Best quantum: -- (unavailable)" in output
-    assert "Source: local/HammingSchemes/UVW-KEM/" in output
+    assert "Source:" not in output
+    assert "Assumption:" not in output

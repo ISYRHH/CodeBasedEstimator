@@ -1,4 +1,4 @@
-"""Preliminary single-target SD routes from local/notes/HammingISD.md.
+"""Submission decoding routes with scheme-specific DOOM target semantics.
 
 The parameter catalogue is a reviewed snapshot of the local submissions, so
 installed packages also work without the (untracked) local/ directory.
@@ -20,10 +20,24 @@ GOALS = ("key_recovery", "msg_recovery")
 # Resolve all classical candidates in the appropriate upstream field backend.
 DEFAULT_HAMMING_ALGORITHMS = None
 MAPPING_REFERENCE = "local/notes/HammingISD.md: 各算法 ISD 实例（未考虑 DOOM/Unbalanced 等）"
+DOOM_REFERENCE = "local/notes/isd_parameter_mapping.md: DOOM 应作为单独维度"
+DOOM_MODES = ("auto", "none")
+
+# These references support the public equations / automorphisms as well as the
+# authors' DOOM discussions. The adapters need no runtime access to local/.
+_DOOM_REFERENCES = {
+    "BIKE_MLThre": "local/HammingSchemes/BIKE_MLThre/Algorithm specifications/BIKE_MLThre.pdf: pages 4-5, KeyGen/Encaps; pages 26-27, section 3.2.1",
+    "TRIKE": "local/HammingSchemes/TRIKE/Algorithm specifications/TRIKE算法文档.pdf: page 26, section 5.1",
+    "HARE": "local/HammingSchemes/HARE/Algorithm specifications/HARE算法文档.pdf: pages 19-20, ISD/DOOM analysis",
+    "NSS-HQC": "local/HammingSchemes/NSS-HQC/Algorithm specifications/NSS-HQC算法文本.pdf: pages 17-20, Algorithms 1-2 and equations (32), (36); pages 36-37, section 4.4",
+    "TriQ-KEM": "local/HammingSchemes/TriQ-KEM/Algorithm specifications/Algorithm specifications.pdf: page 21, equation (13)",
+    "Mito": "local/HammingSchemes/Mito/Algorithm specifications/Algorithm Specification.pdf: PDF page 51 (printed page 50), section 4.3.1 and Table 4.7",
+    "QUBE": "local/HammingSchemes/QUBE/Algorithm specifications/Algorithm specifications.pdf: page 22, Theorem 4",
+    "QCTM": "local/HammingSchemes/QCTM/Algorithm specifications/Algorithm_Text_en.pdf: pages 11-12, MatGen; page 16, Definition 3; pages 18-19, DOOM and Tables 1-3",
+}
 
 _ASSUMPTIONS = (
-    "Preliminary generic ISD baseline following HammingISD.md; not a whole-scheme security estimate.",
-    "Single target and one designated acceptable solution (log2_solutions=0); no DOOM, QC orbit or multiple-solution speedup.",
+    "Generic ISD cost proxy for the documented recovery route; not a whole-scheme security estimate.",
     "Block weights are collapsed to total Hamming weight; Unbalanced ISD and other structure-specific attacks are excluded.",
     "Recovery postprocessing, candidate verification and their success probabilities are not costed.",
 )
@@ -54,7 +68,9 @@ class HammingScheme:
     def parameter_sets(self) -> tuple[str, ...]:
         return tuple(row["parameter_set"] for row in HAMMING_PARAMETERS if row["scheme"] == self.scheme)
 
-    def instances(self, parameter_set: str, goal: str) -> list[AttackInstance]:
+    def instances(self, parameter_set: str, goal: str, *, doom: str = "auto") -> list[AttackInstance]:
+        if doom not in DOOM_MODES:
+            raise ValueError("doom must be auto or none")
         if goal not in GOALS:
             raise ValueError("goal must be key_recovery or msg_recovery")
         if parameter_set not in self.parameter_sets:
@@ -65,6 +81,8 @@ class HammingScheme:
         key = goal == "key_recovery"
         scheme = self.scheme
         assumptions = (*_ASSUMPTIONS, *entry.get("notes", ()))
+        targets, tags = 1, ()
+        references = (MAPPING_REFERENCE, *entry["references"])
 
         if key and scheme in ("QCTM", "UVW-KEM"):
             reason = (
@@ -112,18 +130,88 @@ class HammingScheme:
                 n, k, w = p["n"], p["k1"] + p["k2"], p["w"]
                 formula = "(n,k1+k2,w) over Fq"
             problem = Problem("sd", {"n": n, "k": k, "w": w, "q": q}, log2_solutions=0)
-            route = f"HammingISD.md preliminary {goal}: {formula}; source parameters={p}"
-            if key:
+            route = f"HammingISD.md {goal}: {formula}; source parameters={p}"
+            if doom == "auto" and scheme != "UVW-KEM":
+                codewords = key and scheme in ("BIKE_MLThre", "TRIKE")
+                if scheme == "Mito":
+                    targets = p["d"] * p["r"]
+                elif scheme == "QCTM":
+                    targets = p["ell"]
+                else:
+                    targets = p["r"]
+                tags = ("doom:qccf" if codewords else "doom:qcsd",)
+                if codewords:
+                    problem = Problem("cfp", dict(problem.parameters))
+                    assumptions += (
+                        "QCCF cost proxy: targets counts distinct acceptable nonzero cyclic shifts of the secret "
+                        "under one zero syndrome, not distinct syndromes; no extra target discount is applied.",
+                        "An orbit member is assumed to yield a usable equivalent key after recovery/verification; "
+                        "arbitrary low-weight codewords need not do so.",
+                    )
+                else:
+                    assumptions += (
+                        "QCSD cost proxy: targets counts distinct syndromes under one public matrix; "
+                        "log2_solutions=0 designates one acceptable solution per syndrome. "
+                        "Inverse automorphism maps a recovered target solution back to the original equation.",
+                    )
+                if scheme == "BIKE_MLThre" and key:
+                    assumptions += (
+                        f"The planted secret has exactly r={targets} distinct cyclic shifts: h0 is invertible "
+                        "in F2[X]/(X^r-1). Their public ratio and block weights are preserved; "
+                        "orbit correlations are not modeled.",
+                    )
+                else:
+                    assumptions += (
+                        f"Full usable orbit assumed: M={targets}; parameter snapshots do not contain concrete "
+                        "syndromes/keys to check stabilizers or duplicate targets. Shorter orbits require a smaller "
+                        "targets value in an explicit AttackInstance. Orbit correlations are not modeled.",
+                    )
+                if scheme == "Mito":
+                    assumptions += (
+                        "Mito uses the full C_r x (C_2)^ell action of size d*r, d=2^ell; "
+                        "dyadic shifts permute block-weight labels and preserve total weight. "
+                        "The QCSD backend is a syndrome-target proxy for this QDSD orbit, not a folded attack.",
+                    )
+                elif scheme == "QCTM":
+                    assumptions += (
+                        "QCTM uses automorphism order ell=19, not n or n/ell; syndrome transforms must retain "
+                        "the entire hybrid parity-check space, including the non-circulant tail rows.",
+                    )
+                elif scheme == "NSS-HQC":
+                    assumptions += (
+                        "The target orbit is derived from the full public QC equations; "
+                        "the NSS-HQC specification does not explicitly apply a DOOM discount.",
+                    )
+                route += f"; {tags[0]}, full-orbit targets={targets}"
+                references += (DOOM_REFERENCE, _DOOM_REFERENCES[scheme])
+            else:
+                assumptions += (
+                    "Single target and one designated acceptable solution (log2_solutions=0); "
+                    "no DOOM, QC orbit or multiple-solution speedup.",
+                )
+                if scheme == "UVW-KEM":
+                    assumptions += (
+                        "UVW-KEM has no documented public QC automorphism supplying free targets; "
+                        "the hidden monomial transformation does not supply a DOOM orbit.",
+                    )
+                route += "; single-target SD baseline"
+            if key and not tags and scheme in ("BIKE_MLThre", "TRIKE"):
                 assumptions = (*assumptions, _KEY_ASSUMPTION)
+            if not key and scheme in ("HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE"):
+                assumptions += (
+                    "This message route uses only the complete u equation to recover ephemeral randomness; "
+                    "public decoding/decompression and candidate verification remain necessary. "
+                    "The orbit count is not asserted for the truncated/compressed joint ciphertext problem.",
+                )
 
         return [AttackInstance(
             name=f"{parameter_set}/{goal}", scheme=scheme, parameter_set=parameter_set,
-            goal=goal, problem=problem, route=route, assumptions=assumptions,
-            references=(MAPPING_REFERENCE, *entry["references"]),
+            goal=goal, problem=problem, route=route, targets=targets, tags=tags,
+            assumptions=assumptions, references=references,
         )]
 
 
-def hamming_instances(*, schemes=None, parameter_sets=None, goal="both") -> list[AttackInstance]:
+def hamming_instances(*, schemes=None, parameter_sets=None, goal="both", doom="auto") -> list[AttackInstance]:
     """Select a batch; reject misspelled or incompatible filters before costing."""
     selected = tuple(HAMMING_SCHEMES if schemes is None else schemes)
     if not selected:
@@ -139,4 +227,4 @@ def hamming_instances(*, schemes=None, parameter_sets=None, goal="both") -> list
         raise ValueError("goal must be key_recovery, msg_recovery or both")
     goals = GOALS if goal == "both" else (goal,)
     return [instance for adapter in adapters for name in adapter.parameter_sets if name in wanted
-            for selected_goal in goals for instance in adapter.instances(name, selected_goal)]
+            for selected_goal in goals for instance in adapter.instances(name, selected_goal, doom=doom)]

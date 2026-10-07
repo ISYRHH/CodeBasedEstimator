@@ -100,7 +100,8 @@ def test_doom_does_not_turn_an_impossible_memory_budget_into_a_feasible_result(a
 
 
 @pytest.mark.parametrize("options", [
-    {"q": 3},
+    {"q": 3, "structure": ("block weights",)},
+    {"q": 3, "tags": ("doom:qcsd", "unmodeled tag")},
     {"structure": ("block weights",)},
     {"tags": ("doom:qcsd", "unmodeled tag")},
     {"doom": False},
@@ -110,6 +111,40 @@ def test_doom_does_not_discard_unmodeled_context(options):
     assert all(row.status == "not_implemented" for row in rows)
     assert all(row.time_log2 is None and row.memory_log2 is None and row.reason
                for row in rows)
+
+
+@pytest.mark.parametrize("algorithm", ["Prange", "Stern", "LeeBrickell"])
+@pytest.mark.parametrize("solutions", [None, 0, 2])
+@pytest.mark.parametrize("targets", [1, 1 << 100])
+def test_qary_qcsd_falls_back_to_the_same_single_target_cost(algorithm, solutions, targets):
+    settings = dict(q=3, solutions=solutions)
+    baseline, = classical_rows((algorithm,), doom=False, **settings)
+    row, = classical_rows((algorithm,), targets=targets, **settings)
+    assert row.status == baseline.status == "computed"
+    assert row.time_log2 == baseline.time_log2
+    assert row.memory_log2 == baseline.memory_log2
+    assert row.parameters == baseline.parameters
+    assert row.metadata["is_syndrome_zero"] is False
+    assert row.metadata["effective_log2_solutions"] == baseline.metadata["effective_log2_solutions"]
+    assert row.metadata["tags"] == ["doom:qcsd"] and row.metadata["targets"] == targets
+    assert row.metadata["effective_tags"] == [] and row.metadata["effective_targets"] == 1
+    assert row.metadata["doom"]["model"] == "single_target_fallback"
+    assert row.metadata["doom"]["available_targets"] == targets
+    assert row.metadata["doom"]["active_targets"] == 1
+    assert row.metadata["doom"]["applied"] is False
+    assert row.metadata["doom"]["fallback_reason"] in row.reason
+
+
+@pytest.mark.parametrize("algorithm", ["Prange", "Stern", "LeeBrickell"])
+def test_qary_fallback_preserves_an_impossible_memory_budget(algorithm):
+    baseline, = classical_rows((algorithm,), doom=False, q=3, memory_bound=0)
+    row, = classical_rows((algorithm,), targets=32, q=3, memory_bound=0)
+    assert row.status == baseline.status
+    assert row.status in ("infeasible", "not_applicable")
+    assert row.time_log2 == baseline.time_log2
+    assert row.memory_log2 == baseline.memory_log2
+    assert row.parameters == baseline.parameters
+    assert row.metadata["doom"]["applied"] is False
 
 
 def test_bjmm_weight_deficit_matches_enumerated_errors_and_xor_representations():

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from math import log2
 
 from .models import AttackInstance, Estimate, Options, Problem, QUANTUM_ALGORITHMS
+from .doom_fallback import single_target_fallback
 from .list_costs import LIST_COST_PROFILE
 from .matrix_costs import (DEFAULT_MATRIX_PROFILE, M4RI_MATRIX_PROFILE,
                           cost_model_for_profile, matrix_budget)
@@ -45,9 +47,11 @@ class QuantumModel:
             status = "not_applicable"
             reason = f"{name} currently declares only binary syndrome-decoding routes."
         elif "doom:qcsd" in instance.tags:
+            if instance.tags == ("doom:qcsd",) and not instance.structure:
+                return self._estimate_without_doom(name, instance, options)
             reason = (
-                f"{name} needs a QCSD cost model and independent optimization using "
-                "the available syndrome targets; this algorithm-specific DOOM path is pending."
+                f"{name} has no model for the additional QCSD tags or structure: "
+                f"tags={list(instance.tags)}, structure={list(instance.structure)}."
             )
         elif instance.tags and not codeword_finding:
             reason = f"{name} has no model for tags: {', '.join(instance.tags)}."
@@ -74,6 +78,23 @@ class QuantumModel:
                 "memory_bound_log2_bits": options.memory_bound_log2_bits,
                 "matrix_profile": options.quantum_matrix_profile,
             },
+        )
+
+    def _estimate_without_doom(
+        self, name: str, instance: AttackInstance, options: Options,
+    ) -> Estimate:
+        """Use one QCSD syndrome when its multi-target quantum model is pending.
+
+        Keep the original per-syndrome solution count and matrix profile. This
+        reduction does not apply to unknown constraints or nonzero-codeword
+        failures, and cannot implement a missing single-target algorithm.
+        """
+        baseline = QuantumModel.estimate_algorithm(
+            self, name, replace(instance, tags=(), targets=1), options,
+        )
+        return single_target_fallback(
+            baseline, instance,
+            "Quantum QCSD DOOM is not implemented; using the single-target SD baseline without DOOM.",
         )
 
     def _estimate_time(self, name: str, instance: AttackInstance, options: Options, *,

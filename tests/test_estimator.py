@@ -228,10 +228,14 @@ def test_doom_is_instance_context_and_preserves_each_requested_algorithm(doom_ta
             assert row.time_log2 is not None and row.memory_log2 is not None
             assert row.metadata["doom"]["available_targets"] == targets
             continue
-        if doom_tag == "doom:qccf" and row.algorithm == "QMMT+":
+        if row.algorithm == "QMMT+":
             assert row.status == "computed"
             assert row.time_log2 is not None and row.memory_log2 is None
             assert row.metadata["doom"]["available_targets"] == targets
+            if doom_tag == "doom:qcsd":
+                assert row.metadata["doom"]["model"] == "single_target_fallback"
+                assert row.metadata["effective_targets"] == 1
+                assert row.metadata["effective_log2_solutions"] == solutions
         else:
             assert row.status == "not_implemented"
             assert row.time_log2 is None and row.memory_log2 is None

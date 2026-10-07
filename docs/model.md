@@ -8,7 +8,7 @@
 
 ## 经典 DOOM 接口
 
-QCSD 和 QCCF 均使用 `AttackInstance` 的 `tags` 和正整数 `targets=M` 传递 DOOM 上下文，在各经典算法内部处理。输入参数为 $n,k,w,q$，要求二元域（省略 $q$ 时取 2）、$0<k<n$ 和 $1\le w\le n-k$。
+QCSD 和 QCCF 均使用 `AttackInstance` 的 `tags` 和正整数 `targets=M` 传递 DOOM 上下文，在各经典算法内部处理。加速模型的输入参数为 $n,k,w,q$，要求二元域（省略 $q$ 时取 2）、$0<k<n$ 和 $1\le w\le n-k$；非二元 QCSD 的单目标回退见下文。
 
 | 输入项 | QCSD | QCCF |
 |---|---|---|
@@ -17,7 +17,7 @@ QCSD 和 QCCF 均使用 `AttackInstance` 的 `tags` 和正整数 `targets=M` 传
 | `targets=M` | 同一矩阵下可用的 syndrome 数量 | 不同、可用的非零重量 $w$ 码字总数 |
 | `problem.log2_solutions` | 每个 syndrome 的解数对数；`0` 表示单解，省略时使用 CE 默认值 | 必须省略；由 `targets` 设置 CE 的对数解数 |
 
-JSON 输入格式及运行命令见 [README](../README.md#命令行)。CLI 的 `--doom qcsd`／`--doom qccf` 可添加对应标签（已有标签须一致），`--targets M` 可覆盖数量。两种机制的 $M$ 均由调用方提供，模型不从 QC 轨道自动推导数量或独立性，重复轨道元素不能重复计数。额外标签、结构约束和非二元 DOOM 不受支持；内置 `hamming` 路线仍采用单目标 SD 近似，不自动启用 DOOM。`qcsd` 问题类型仍留给自定义模型。
+JSON 输入格式及运行命令见 [README](../README.md#命令行)。`estimate` 子命令的 `--doom qcsd`／`--doom qccf` 可添加对应标签（已有标签须一致），`--targets M` 可覆盖数量。两种机制的 $M$ 均由调用方提供，成本后端不从 QC 轨道自动推导数量或独立性，重复轨道元素不能重复计数。内置 `hamming` 适配器默认根据下述方案映射提供轨道数量。额外标签、结构约束和非二元 DOOM 不受支持；其中仅含 `doom:qcsd` 标签、无额外结构的非二元 `sd` 输入，经典后端自动退回普通单目标 SDFq，保留有限域、每综合征解数及内存上限，并报告 `single_target_fallback`。非二元 QCCF 没有可用的非零码字基线，仍不支持。`qcsd` 问题类型仍留给自定义模型。
 
 ### QCSD：多 syndrome 调参模型
 
@@ -97,11 +97,43 @@ $$
 
 这是通用 SD 的多解成本代理，尚未实现专门的零 syndrome 非零码字搜索成本。特别是，经典 Prange 的 $p=0$ 分支在零 syndrome 下会退化为零码字；表示法中的自身碰撞及其排除费用也未重新建模。因此 CE 返回的有限结果表示该代理的成本，不证明对应参数能按相同成本找到非零码字。量子 QCCF 的处理见下文。
 
+## 内置 Hamming 方案的 DOOM 映射
+
+`hamming` CLI 与 `HammingScheme.instances`／`hamming_instances` 默认 `doom="auto"`。适配器保持 `HammingISD.md` 的 $(n,k,w,q)$，仅按公开方程区分目标语义，在算法优化前设置类型、标签及 `targets`。以下 $r$ 是基础循环块长，Mito 的 $d=2^\ell$ 是环坐标数；QCTM 的 $\ell$ 是另一含义的自同构阶数。
+
+| 方案 | 密钥路线 | 消息路线 | 目标数 $M$ | 本地原始说明书依据（PDF 页码） |
+|---|---|---|---|---|
+| BIKE_MLThre | QCCF，`cfp` | QCSD，`sd` | $r$ | `BIKE_MLThre.pdf` pp.4–5 KeyGen/Encaps、pp.26–27 §3.2.1 |
+| TRIKE | QCCF，`cfp` | QCSD，`sd` | $r$ | `TRIKE算法文档.pdf` p.6 算法1–2、p.26 §5.1 |
+| HARE | QCSD | 完整 `u` 的 QCSD | $r$ | `HARE算法文档.pdf` pp.9–10 算法3–5、p.19 §7.3.3 |
+| NSS-HQC | QCSD | 完整 `u` 的 QCSD | $r$ | `NSS-HQC算法文本.pdf` pp.17–20 算法1–2、式(32)/(36)、pp.36–37 §4.4 |
+| TriQ-KEM | QCSD | 完整 `u` 的 QCSD | $r$ | `Algorithm specifications.pdf` p.8 加密方程、p.21 式(13) |
+| QUBE | 两条公钥综合征组成的 QCSD | 完整 `u` 的 QCSD | $r$ | `Algorithm specifications.pdf` pp.13–14 式(2)/(3)、p.22 定理4 |
+| Mito | 完整 QDSD 的多综合征代理 | 完整 `u` 的同类代理 | $dr$ | `Algorithm Specification.pdf` PDF p.51（印刷 p.50）§4.3.1、表4.7 |
+| QCTM | 仍未实现 | QCSD | $\ell=19$ | `Algorithm_Text_en.pdf` pp.11–12 MatGen、p.16 定义3、pp.18–19 |
+| UVW-KEM | 仍未实现 | 普通多元 SD | $1$ | `UVW-KEM.pdf` 未给出可公开使用的 QC 目标轨道 |
+
+各说明书均在 `local/HammingSchemes/<方案>/Algorithm specifications/`；逐实例 `references` 记录完整路径，包运行不依赖未跟踪的 `local/` 文件。
+
+BIKE/TRIKE 密钥的 $M$ 表示同一零综合征下的非零秘密移位，使用 `doom:qccf` 并省略 `log2_solutions`，不再添加多综合征折扣。BIKE 的秘密块 $h_0$ 可逆，因而其 $r$ 个移位互不相同。其余完整轨道数量作为参数快照的建模假设，不表示已检查具体公钥/综合征的稳定子或目标独立性；若实际轨道较短，应构造相同类型的显式 `AttackInstance` 并减少 `targets`。
+
+QCSD 路线使用 `doom:qcsd`、`log2_solutions=0`，即每个综合征指定一个可接受解。循环关系 $HP_j=Q_jH$ 允许在同一矩阵下解任一 $Q_js$，然后逆移位回原问题；$r$ 个移位须同时作用于所有相关块，不能按块数再乘一次目标数。HARE、NSS-HQC、TriQ-KEM、Mito、QUBE 的密钥也是带给定综合征的搜索，不因名为密钥恢复而改成 QCCF。NSS-HQC 的轨道是从完整公开方程推导的，本项目不声称其说明书已经扣除了 DOOM 收益。
+
+Mito 采用 $C_r\times(C_2)^\ell$ 的完整作用，$M=dr$；群作用会置换块重量标签，保留总重量。这里把其目标集合传给通用 QCSD 成本代理，不计折叠及恢复原块的结构攻击。QCTM 采用 $M=19$，不按码长或块数推算；变换必须保留 hybrid 校验空间的普通尾部行。
+
+上述消息 `u` 路线只估计临时稀疏量恢复，仍需公开译码、解压和候选验证；完整轨道数量不自动适用于截断、压缩或投影后的联合密文。分块重量、拒绝采样及后处理仍沿用已声明的简化，不另加 Unbalanced/CombGap 折扣。
+
+`doom="none"`（CLI `--doom none`）恢复原 `sd`、`targets=1`、`log2_solutions=0`、无标签的基线，包括 BIKE/TRIKE 密钥的普通 SD 代理。它不是单码字 QCCF 的专用成本。量子 QCSD 自动回退至单目标 SD，量子 QCCF 则继续使用已有非零码字多解代理及其限制。JSON 保留完整输入上下文；CSV 的 `problem_kind`、`doom`、`targets` 记录输入，`effective_doom`／`effective_targets` 记录实际使用的上下文，`active_targets` 在经典显式 QCSD 调参模型及上述回退中提供。
+
 ## 量子适用范围
 
 量子实现 QSS 和 QMMT+，面向随机满行秩矩阵下的普通二元、单目标 SD：$He^{\mathsf T}=s$、$\operatorname{wt}(e)=w$，整数输入满足 $0<k<n$、$1\le w\le n-k$。支持通过外层成功概率建模的多解，以及相同口径的 QCCF 非零码字成本代理。非二元、Rank SD、QCSD 多 syndrome 和其他结构专用量子模型不在此范围。
 
-普通 SD 中 `log2_solutions=0` 指定单解；省略或 `null` 时，量子仍按单解处理，经典使用上游默认解数。比较同一单解问题时应显式指定 `0`。内置 Hamming 路线采用普通 SD 近似，不计结构或 DOOM 加速。
+对于仅含 `doom:qcsd` 标签、没有额外结构的二元 `sd` 输入，DOOM 未实现时自动取其中一个综合征，使用普通单目标模型重新优化。原 `log2_solutions` 表示该综合征的解数，保持不变；目标数不混入解数，也不折扣最终时间。矩阵配置和其他选项沿用输入。因此 QSS/QMMT+ 的结果与相同参数、相同每综合征解数的无 DOOM 调用一致。此回退不实现 QPrange，也不去除未知标签、结构约束或非零码字限制；无可行候选仍为 `infeasible`。
+
+报告保留原实例的标签与目标数；回退行的 `metadata.doom.model="single_target_fallback"`、`applied=false`、`active_targets=1`，并给出原因。`metadata.effective_tags=[]`、`effective_targets=1` 标明实际成本来自无 DOOM 的单目标路线。文本结果和 CSV 的 `reason` 同时说明回退，避免将此量子成本误读为多目标加速。
+
+普通 SD 中 `log2_solutions=0` 指定单解；省略或 `null` 时，量子仍按单解处理，经典使用上游默认解数。比较同一单解问题时应显式指定 `0`。内置 Hamming 的默认上下文见上节；仅 `doom="none"` 统一采用原单目标 SD 近似。
 
 显式 `log2_solutions=s` 表示 $M=2^s$ 个可接受解，取任意一个即成功，语义与 CE 的 `nsolutions` 一致。CLI 的 `estimate --log2-solutions s`（别名 `--nsolutions s`）覆盖该字段。解数必须是有限、非负的对数；不会再叠加 CE 的默认期望解数。
 
