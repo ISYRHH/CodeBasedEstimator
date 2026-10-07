@@ -113,8 +113,10 @@ def main(argv=None) -> int:
     demo = commands.add_parser("demo", help="run small synthetic key/msg examples")
     run = commands.add_parser("estimate", help="estimate a single JSON attack instance")
     run.add_argument("input", type=Path)
-    run.add_argument("--doom", choices=("qccf", "qcsd"), help="DOOM mechanism tag, interpreted inside each algorithm")
-    run.add_argument("--targets", type=int, help="usable candidate/target count, interpreted according to the DOOM tag")
+    run.add_argument("--doom", choices=("qcsd", "qccf"),
+                     help="DOOM tag: qcsd for syndrome targets, qccf for nonzero codewords; must match an existing tag")
+    run.add_argument("--targets", type=int,
+                     help="override usable count: syndromes for QCSD, distinct nonzero codewords for QCCF")
     demo.set_defaults(doom=None, targets=None)
     hamming = commands.add_parser("hamming", help="evaluate local HammingSchemes parameter snapshots without DOOM/Unbalanced")
     hamming.add_argument("--schemes", nargs="+", choices=HAMMING_SCHEMES, help="default: all nine schemes")

@@ -4,11 +4,24 @@
 
 ## 经典后端与适用范围
 
-经典二元 SD、多元 SD、Rank SD 分别委托 CryptographicEstimators 2.1.1 的 `SDEstimator`、`SDFqEstimator`、`RankSDEstimator`。采用有限复杂度、位复杂度和常数内存访问模型；时间单位为位操作，内存单位为 bits，均输出 $\log_2$ 值。普通单目标路线保留 CE 成本和参数搜索；Rank SD 不接受显式解数。经典 QCSD 使用以下 DOOM 扩展。
+经典二元 SD、多元 SD、Rank SD 分别委托 CryptographicEstimators 2.1.1 的 `SDEstimator`、`SDFqEstimator`、`RankSDEstimator`。采用有限复杂度、位复杂度和常数内存访问模型；时间单位为位操作，内存单位为 bits，均输出 $\log_2$ 值。普通单目标路线保留 CE 成本和参数搜索；Rank SD 不接受显式解数。经典 QCSD 和 QCCF 使用以下不同的 DOOM 模型。
 
-## 经典 QCSD 的 DOOM 模型
+## 经典 DOOM 接口
 
-接口为二元 `Problem(kind="sd", ...)`、`tags=("doom:qcsd",)` 和正整数 `targets=M`。$M$ 表示同一矩阵下可用的 syndrome 数量，由调用方提供；模型不从 QC 轨道自动推导数量或独立性。`log2_solutions` 仍表示**每个 syndrome** 的解数对数，省略时保留 CE 默认值，不能再加 $\log_2M$。`qcsd` 问题类型仍留给自定义模型；额外标签、结构约束、非二元 DOOM 和 QCCF 不受支持。内置 `hamming` 路线仍采用原有单目标 SD 近似，不自动启用 DOOM。
+QCSD 和 QCCF 均使用 `AttackInstance` 的 `tags` 和正整数 `targets=M` 传递 DOOM 上下文，在各经典算法内部处理。输入参数为 $n,k,w,q$，要求二元域（省略 $q$ 时取 2）、$0<k<n$ 和 $1\le w\le n-k$。
+
+| 输入项 | QCSD | QCCF |
+|---|---|---|
+| `problem.kind` | `sd` | `cfp`（也接受 `qccf`） |
+| `tags` | `["doom:qcsd"]` | `["doom:qccf"]` |
+| `targets=M` | 同一矩阵下可用的 syndrome 数量 | 不同、可用的非零重量 $w$ 码字总数 |
+| `problem.log2_solutions` | 每个 syndrome 的解数对数；`0` 表示单解，省略时使用 CE 默认值 | 必须省略；由 `targets` 设置 CE 的对数解数 |
+
+JSON 输入格式及运行命令见 [README](../README.md#命令行)。CLI 的 `--doom qcsd`／`--doom qccf` 可添加对应标签（已有标签须一致），`--targets M` 可覆盖数量。两种机制的 $M$ 均由调用方提供，模型不从 QC 轨道自动推导数量或独立性，重复轨道元素不能重复计数。额外标签、结构约束和非二元 DOOM 不受支持；内置 `hamming` 路线仍采用单目标 SD 近似，不自动启用 DOOM。`qcsd` 问题类型仍留给自定义模型。
+
+### QCSD：多 syndrome 调参模型
+
+`targets` 与**每个 syndrome** 的 `log2_solutions` 分别计数，不能将 $\log_2M$ 再加入后者。
 
 Prange、Stern、Dumer、BJMM 使用 `ce-doom-finite-v1` 调参模型。设 $m=n-k$、$S$ 为每个 syndrome 的解数、$P_0$ 为一个解满足重量分布的概率，选择实际使用的目标数 $1\le u\le M$。一次迭代的成功率代理、位操作成本及内存为
 
@@ -68,11 +81,27 @@ $$
 
 实现及参数点重放见 [DOOM 成本与搜索](../codebased_estimator/classical_doom.py) 的 `evaluate_parameters`，BJMM 有限计数见 [BJMM DOOM](../codebased_estimator/doom_bjmm.py)。这些均为随机实例下的成本近似，不是安全下界或实测运行时间。
 
+### QCCF：多解成本代理
+
+这里 $M$ 计数满足 $Hc^{\mathsf T}=0$、$\operatorname{wt}(c)=w$ 的**不同、可用非零码字**，包括调用方确认可用的轨道成员。
+
+该分支在 CE 初始化和参数优化之前设置
+
+$$
+\texttt{nsolutions}=\log_2M.
+$$
+
+这是 CE 的对数解数参数，替换其默认期望解数，不与默认值相加。为避免重复计数，输入不得同时指定 `log2_solutions`。Prange、Stern、Dumer、BJMM、BothMay、MayOzerov 等全部二元经典算法均按这一解数重新运行各自的 CE 优化，内存限制仍由 CE 处理；因最优参数可能改变，时间和内存均可能改变。输出不再额外除以 $M$ 或 $\sqrt M$，也不走 QCSD 的多 syndrome 列表模型。
+
+原始报告保留 `cfp`／`qccf` 类型、标签及 `targets`。`metadata.doom.model="ce_nsolutions"`、`metadata.doom.cost_model="ce-qccf-nsolutions-v1"` 标识这一路线，`effective_log2_solutions` 记录实际传入的 $\log_2M$。适配实现见 [经典后端](../codebased_estimator/backend.py)。
+
+这是通用 SD 的多解成本代理，尚未实现专门的零 syndrome 非零码字搜索成本。特别是，Prange 的 $p=0$ 分支在零 syndrome 下会退化为零码字；表示法中的自身碰撞及其排除费用也未重新建模。因此 CE 返回的有限结果表示该代理的成本，不证明对应参数能按相同成本找到非零码字。量子 QCCF 支持范围不变。
+
 ## 量子适用范围
 
 量子实现 QSS 和 QMMT+，面向随机满行秩矩阵下的普通二元、单目标、单解 SD：$He^{\mathsf T}=s$、$\operatorname{wt}(e)=w$，整数输入满足 $0<k<n$、$1\le w\le n-k$。非二元、Rank SD、多目标、多解、DOOM 和结构专用量子模型不在此范围。
 
-`log2_solutions=0` 指定单解；省略或 `null` 时，量子仍按单解处理，经典使用上游默认解数。比较同一单解问题时应显式指定 `0`。内置 Hamming 路线采用普通 SD 近似，不计结构或 DOOM 加速。
+普通 SD 中 `log2_solutions=0` 指定单解；省略或 `null` 时，量子仍按单解处理，经典使用上游默认解数。比较同一单解问题时应显式指定 `0`。内置 Hamming 路线采用普通 SD 近似，不计结构或 DOOM 加速。
 
 量子仅估计时间，不估计内存，也不使用经典内存上限筛选参数。一次长度至多为 $n$ 的向量操作归一计为 1，重复预算乘 $n$ 转为位操作；输出 `time_log2` 的单位为 `quantum_bit_operations`。模型假设抽象相干访问，固定成功率放大及正反算的常数因子统一归一化，不能据此推断实际门数或设备运行时间。
 

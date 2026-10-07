@@ -30,10 +30,14 @@ def _strings(values, name: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Problem:
-    """sd: (n,k,w,q); rank_sd: (q,m,n,k,r). Other kinds need custom models.
+    """sd: (n,k,w,q); rank_sd: (q,m,n,k,r).
 
-    log2_solutions describes solutions of ONE syndrome, never DOOM targets.
-    None preserves the backend's default; 0 means one solution.
+    cfp/qccf support the tagged classical solution-count proxy; other routes
+    for these problem kinds, and other kinds, require custom models.
+
+    log2_solutions describes solutions of ONE syndrome, never distinct syndrome
+    targets. None preserves the SD backend's default; 0 means one solution.
+    Tagged QCCF instead supplies its codeword count through AttackInstance.targets.
     """
 
     kind: str
@@ -79,8 +83,9 @@ class AttackInstance:
     tags are passed to algorithms BEFORE parameter optimization. DOOM tags:
       doom:qccf -- targets counts usable nonzero codeword/orbit candidates;
       doom:qcsd -- targets counts usable syndrome targets under one matrix.
-    Neither tag implies independence, a universal speedup, or a conversion to
-    log2_solutions. Each algorithm must implement the corresponding semantics.
+    Neither tag implies independence or a universal speedup. The built-in
+    classical QCCF proxy maps its total usable codeword count to CE nsolutions;
+    QCSD targets remain separate from each syndrome's log2_solutions.
     """
 
     name: str

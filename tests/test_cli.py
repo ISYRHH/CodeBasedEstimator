@@ -114,6 +114,33 @@ def test_cli_doom_flags_preserve_solutions_and_algorithm_names(attack_file, caps
                for row in quantum)
 
 
+def test_cli_qccf_uses_ce_solution_counts_and_preserves_the_original_instance(attack_file, capsys):
+    from math import log2
+
+    data = json.loads(attack_file.read_text())
+    data["problem"]["kind"] = "cfp"
+    data["problem"].pop("log2_solutions")
+    attack_file.write_text(json.dumps(data))
+    assert main(["estimate", str(attack_file), "--classical-algorithms", "Prange", "Stern",
+                 "--quantum-algorithms", "QPrange", "--doom", "qccf",
+                 "--targets", "3", "--json"]) == 0
+    record, = json.loads(capsys.readouterr().out)
+    attack = record["instance"]
+    assert attack["problem"]["kind"] == "cfp"
+    assert attack["problem"]["log2_solutions"] is None
+    assert attack["tags"] == ["doom:qccf"]
+    assert attack["targets"] == 3
+    classical, quantum = record["results"][:2], record["results"][2:]
+    direct = {type(algorithm).__name__: algorithm for algorithm in
+              SDEstimator(n=40, k=20, w=4, nsolutions=log2(3)).algorithms()}
+    for row in classical:
+        assert row["status"] == "computed"
+        assert row["time_log2"] == pytest.approx(direct[row["algorithm"]].time_complexity())
+        assert row["metadata"]["doom"]["model"] == "ce_nsolutions"
+        assert row["metadata"]["effective_log2_solutions"] == log2(3)
+    assert quantum[0]["status"] == "not_applicable"
+
+
 def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys, quantum_cost):
     assert main(["demo", "--json"]) == 0
     records = json.loads(capsys.readouterr().out)

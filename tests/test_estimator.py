@@ -223,7 +223,7 @@ def test_doom_is_instance_context_and_preserves_each_requested_algorithm(doom_ta
     assert report.instance.targets == targets
     assert report.instance.problem.log2_solutions == solutions
     for row in report.results:
-        if doom_tag == "doom:qcsd" and row.model == "classical":
+        if row.model == "classical":
             assert row.status == "computed"
             assert row.time_log2 is not None and row.memory_log2 is not None
             assert row.metadata["doom"]["available_targets"] == targets
