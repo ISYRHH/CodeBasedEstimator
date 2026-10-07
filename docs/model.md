@@ -2,9 +2,73 @@
 
 本项目分别调用经典后端和量子模型，报告所选算法及译码路线的成本，不将其直接视为整个密码方案的安全位数。
 
-## 经典后端与量子适用范围
+## 经典后端与适用范围
 
-经典二元 SD、多元 SD、Rank SD 分别委托 CryptographicEstimators 2.1.1 的 `SDEstimator`、`SDFqEstimator`、`RankSDEstimator`。采用有限复杂度、位复杂度和常数内存访问模型；时间单位为位操作，内存单位为 bits，均输出 $\log_2$ 值。经典内存上限交由后端处理。适配器只接受无结构、无标签的单目标路线；Rank SD 不接受显式解数。
+经典二元 SD、多元 SD、Rank SD 分别委托 CryptographicEstimators 2.1.1 的 `SDEstimator`、`SDFqEstimator`、`RankSDEstimator`。采用有限复杂度、位复杂度和常数内存访问模型；时间单位为位操作，内存单位为 bits，均输出 $\log_2$ 值。普通单目标路线保留 CE 成本和参数搜索；Rank SD 不接受显式解数。经典 QCSD 使用以下 DOOM 扩展。
+
+## 经典 QCSD 的 DOOM 模型
+
+接口为二元 `Problem(kind="sd", ...)`、`tags=("doom:qcsd",)` 和正整数 `targets=M`。$M$ 表示同一矩阵下可用的 syndrome 数量，由调用方提供；模型不从 QC 轨道自动推导数量或独立性。`log2_solutions` 仍表示**每个 syndrome** 的解数对数，省略时保留 CE 默认值，不能再加 $\log_2M$。`qcsd` 问题类型仍留给自定义模型；额外标签、结构约束、非二元 DOOM 和 QCCF 不受支持。内置 `hamming` 路线仍采用原有单目标 SD 近似，不自动启用 DOOM。
+
+Prange、Stern、Dumer、BJMM 使用 `ce-doom-finite-v1` 调参模型。设 $m=n-k$、$S$ 为每个 syndrome 的解数、$P_0$ 为一个解满足重量分布的概率，选择实际使用的目标数 $1\le u\le M$。一次迭代的成功率代理、位操作成本及内存为
+
+$$
+P_{\rm succ}=\min(1,uSP_0),\qquad
+W=n(G+W_{\rm shared}+uW_{\rm target})+(u-1)m^2,
+$$
+$$
+B=n(B_{\rm matrix}+B_{\rm shared}+uB_{\rm target})+(u-1)m,
+\qquad T=W/P_{\rm succ}.
+$$
+
+$G,B_{\rm matrix}$ 采用 CE 的高斯消元与矩阵存储预算，列表项按 CE 的向量口径乘 $n$ 转为位操作或 bits。第一份 syndrome 已包含在 CE 基线中；额外 $u-1$ 份各计 $m^2$ 位操作的稠密线性变换及 $m$ bits 存储。列表显式存储，$B$ 受经典内存上限约束。固定列表参数时，$W,B$ 随 $u$ 仿射增长；搜索检查内存允许的端点及成功率饱和点相邻的整数，避免盲目使用全部目标。
+
+Prange 使用 $P_0=\binom mw/\binom nw$，没有列表项，优化目标批量与 CE 消元块宽。Stern 和 Dumer 分别取 $K=k$ 和 $K=k+\ell$，令 $h_0=\lfloor K/2\rfloor$、$h_1=K-h_0$，允许两个半区采用不同重量 $p_L,p_R$：
+
+$$
+A=\binom{h_0}{p_L},\quad D=\binom{h_1}{p_R},\quad
+P_0=\frac{AD\binom{m-\ell}{w-p_L-p_R}}{\binom nw},
+$$
+$$
+W_{\rm shared}=B_{\rm shared}=A,\qquad
+W_{\rm target}=D+AD/2^\ell,\qquad B_{\rm target}=D.
+$$
+
+列表匹配计期望碰撞数，优化 $\ell,p_L,p_R$，因此 DOOM 收益取决于重新选择的列表大小、重量和匹配位数。该构造依据 [Sendrier, *Decoding One Out of Many*, §5、式 (8)](https://eprint.iacr.org/2011/367)；这里的有限多项式价格是本项目的建模选择。
+
+BJMM 的显式 DOOM 分支采用两层结构，仅第四张底层列表附带目标。设 $K=k+\ell$，两个半区长度为 $h_0,h_1$；输出半区重量为 $p,p-z$，四张底层列表重量为 $p_1,p_1,p_1,p_1-z$，其中 $z$ 对应 `weight_deficit`，$p$ 为偶数。有限半区表示数与匹配位数为
+
+$$
+R=\binom p{p/2}\binom{h_0-p}{p_1-p/2}
+  \binom{p-z}{p/2}\binom{h_1-p+z}{p_1-p/2},\qquad
+\ell_1=\min(\ell,\lfloor\log_2R\rfloor).
+$$
+
+令 $A=\binom{h_0}{p_1}$、$C=\binom{h_1}{p_1}$、$D=\binom{h_1}{p_1-z}$。中间列表及顶层输出采用均值 $X=AC/2^{\ell_1}$、$Y=AD/2^{\ell_1}$、$Z=XY/2^{\ell-\ell_1}$，不将小于 1 的均值向上取整。哈希合并使用 $a+b+ab/2^j$ 的向量成本，得到
+
+$$
+W_{\rm shared}=2A+C+2X,\quad W_{\rm target}=D+2Y+Z,\qquad
+B_{\rm shared}=A+C+X,\quad B_{\rm target}=D+Y,
+$$
+$$
+P_0=\frac{\binom{h_0}p\binom{h_1}{p-z}\binom{m-\ell}{w-2p+z}}{\binom nw}.
+$$
+
+优化 $\ell,p,p_1,z$，目标扩展由 $uD,uY$ 体现。构造依据 [Esser–May–Zweydinger, *McEliece needs a Break*, §2、§5.1](https://eprint.iacr.org/2021/1634)，有限半区计数延续 CE BJMMd2 的划分方式。$\ell_1$ 只保证期望表示数至少为 1，不保证每个目标都存在存活表示；模型保留随机标签和表示法的启发式假设，也不计目标间相关性。显式存储预算可能高于论文的流式实现。
+
+四个算法在 $M=1$ 时完全返回原有 CE 时间、内存和参数。$M>1$ 时继续保留该单目标候选；BJMM 的 CE 两层／三层基线也参与比较，因此选择忽略额外目标不会产生更差成本。小实例在预算内枚举，较大实例使用确定性网格和整数局部细化；结果中的 `metadata.doom.search` 记录搜索范围、预算与停止信息，不宣称一般实例的全局最优。`active_targets` 记录最终使用的目标数，`strategy` 区分显式 DOOM 和单目标基线。
+
+BothMay、MayOzerov 以及其余二元经典算法使用 `sqrt_targets_approximation`：
+
+$$
+\log_2T_{\rm DOOM}=\max(0,\log_2T_{\rm CE}-\tfrac12\log_2M).
+$$
+
+此近似不重新调参，也不改变内存或不可行状态；`log2_speedup` 记录名义加速，`realized_log2_speedup` 记录截断后的实际差值。它不建模目标相关性、额外变换或算法专用的多目标列表费用。
+
+实现及参数点重放见 [DOOM 成本与搜索](../codebased_estimator/classical_doom.py) 的 `evaluate_parameters`，BJMM 有限计数见 [BJMM DOOM](../codebased_estimator/doom_bjmm.py)。这些均为随机实例下的成本近似，不是安全下界或实测运行时间。
+
+## 量子适用范围
 
 量子实现 QSS 和 QMMT+，面向随机满行秩矩阵下的普通二元、单目标、单解 SD：$He^{\mathsf T}=s$、$\operatorname{wt}(e)=w$，整数输入满足 $0<k<n$、$1\le w\le n-k$。非二元、Rank SD、多目标、多解、DOOM 和结构专用量子模型不在此范围。
 

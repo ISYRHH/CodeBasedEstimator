@@ -2,7 +2,7 @@
 
 编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。
 支持经典二元／多元 SD、Rank SD，以及二元 SD 的 QSS、QMMT+ 量子时间估计；内置 9 个 Hamming 方案的参数快照。
-结果描述给定译码路线的成本，不代表整个方案的安全位数。模型与适用范围见 [模型说明](docs/quantum_model.md)。
+结果描述给定译码路线的成本，不代表整个方案的安全位数。模型与适用范围见 [模型说明](docs/model.md)。
 
 ## 安装
 
@@ -24,6 +24,19 @@ python3 -m venv .venv
 .venv/bin/python -m codebased_estimator estimate examples/instance.json \
   --classical-algorithms Prange Stern --quantum-algorithms QSS 'QMMT+' --json
 ```
+
+为普通二元 SD 实例指定同一矩阵下的可用 syndrome 数量，启用经典 QCSD/DOOM 模型：
+
+```sh
+.venv/bin/python -m codebased_estimator estimate examples/instance.json \
+  --doom qcsd --targets 32 \
+  --classical-algorithms Prange Stern Dumer BJMM BothMay --quantum-algorithms --json
+```
+
+Prange、Stern、Dumer 和 BJMM 重新优化 DOOM 参数及实际使用的目标数；BJMM 的显式 DOOM 分支采用两层结构。
+BothMay、MayOzerov 等其他二元经典算法采用时间除以 `sqrt(targets)` 的近似，内存与参数保持不变。
+JSON 的 `metadata.doom` 区分调参模型和近似，并记录可用目标数、策略和加速量。
+`targets` 与每个 syndrome 的 `log2_solutions` 分别计数；不根据 QC 结构自动推定目标数量。
 
 查看内置参数集，并选择方案、参数集和恢复目标：
 
@@ -79,6 +92,10 @@ print(report.to_dict())
 - QSS/QMMT+ 适用于普通二元、单目标、单解 SD。显式多解、DOOM、结构专用量子模型尚未实现；
   不支持的请求返回明确状态。省略 `log2_solutions` 时，经典采用上游期望解数，量子按单解处理；
   比较同一单解问题时应显式设为 `0`。
+- 经典 DOOM 接口为二元 `Problem(kind="sd", ...)` 加 `doom:qcsd` 标签；`qcsd` 问题类型仍留给自定义模型。
+  不支持额外结构约束、非二元 DOOM 或 QCCF。显式模型计入额外 syndrome 的变换与存储费用，
+  在成功率饱和和内存上限下选择目标数；单目标时完全保留 CE 结果，多目标时仍将它作为候选。
+  列表和成功率采用随机标签下的期望近似；较大参数的搜索不保证全局最优。
 - 内置 Hamming 参数随包提供，无需本地规范文件；输出中的源文件路径用于记录快照来源。
   这些路线采用普通 SD 近似，不利用 DOOM 或结构加速；QCTM、UVW-KEM 的密钥恢复路线尚未实现。
 - 经典与量子分别报告所选算法中的最小时间结果；启发式搜索不保证一般实例的全局最优。

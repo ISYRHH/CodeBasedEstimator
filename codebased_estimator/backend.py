@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from importlib import metadata
+from dataclasses import replace
 from functools import lru_cache
 import math
 from numbers import Integral, Real
@@ -114,7 +115,11 @@ def backend_info() -> dict:
 
 
 class ClassicalModel:
-    """Evaluate a single, unstructured decoding instance in bit operations."""
+    """Evaluate unstructured decoding, including binary QCSD target models.
+
+    Prange, Stern, Dumer and BJMM optimize explicit DOOM costs. Other binary
+    SD algorithms retain a marked square-root-of-targets approximation.
+    """
 
     name = "classical"
 
@@ -195,6 +200,53 @@ class ClassicalModel:
         family, parameters, estimator_class, all_classes, candidates = resolved
         if name not in candidates:
             raise ValueError(f"Unknown or unavailable {family} algorithm: {name}")
+        if instance.tags == ("doom:qcsd",):
+            if family != "SDEstimator":
+                return self._unsupported(
+                    name, instance, "Classical QCSD target models require binary SD (q=2).",
+                )
+            if instance.structure:
+                return self._unsupported(
+                    name, instance,
+                    "This adapter has no reduction for structured decoding instances: "
+                    + ", ".join(instance.structure),
+                )
+            # Keep each syndrome's solution count unchanged. This internal
+            # single-target baseline is not another requested algorithm hook.
+            baseline = ClassicalModel.estimate_algorithm(
+                self, name, replace(instance, tags=(), targets=1), options,
+            )
+            if name in ("Prange", "Stern", "Dumer", "BJMM"):
+                from .classical_doom import estimate_doom
+
+                return estimate_doom(name, instance, options, baseline)
+            speedup = 0.5 * math.log2(instance.targets)
+            time = baseline.time_log2
+            computed = (baseline.status == "computed" and time is not None
+                        and math.isfinite(time))
+            adjusted_time = max(0.0, time - speedup) if computed else time
+            return replace(
+                baseline,
+                time_log2=adjusted_time,
+                assumptions=(
+                    "Generic unstructured binary decoding; upstream classical cost model.",
+                    "QCSD uses a sqrt(M) time-speedup approximation for usable syndrome "
+                    "targets under one matrix; algorithm parameters and memory are unchanged.",
+                    "This approximation does not model target correlations or "
+                    "algorithm-specific multi-target list costs.",
+                ),
+                metadata={
+                    **baseline.metadata,
+                    "tags": list(instance.tags),
+                    "targets": instance.targets,
+                    "doom": {
+                        "model": "sqrt_targets_approximation",
+                        "available_targets": instance.targets,
+                        "log2_speedup": speedup,
+                        "realized_log2_speedup": time - adjusted_time if computed else None,
+                    },
+                },
+            )
         if instance.tags:
             reasons = {
                 "doom:qccf": "QCCF requires an algorithm-specific model of available codeword solutions/orbit candidates.",

@@ -105,8 +105,13 @@ def test_cli_doom_flags_preserve_solutions_and_algorithm_names(attack_file, caps
     assert [row["algorithm"] for row in records[0]["results"]] == [
         "Prange", "Stern", "QPrange", "QSS", "QMMT+",
     ]
+    classical = records[0]["results"][:2]
+    quantum = records[0]["results"][2:]
+    assert all(row["status"] == "computed" and row["time_log2"] is not None
+               and row["metadata"]["doom"]["available_targets"] == 32
+               for row in classical)
     assert all(row["status"] == "not_implemented" and row["time_log2"] is None
-               for row in records[0]["results"])
+               for row in quantum)
 
 
 def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys, quantum_cost):
