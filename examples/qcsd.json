@@ -1,0 +1,11 @@
+{
+  "name": "synthetic-qcsd",
+  "goal": "msg_recovery",
+  "problem": {
+    "kind": "sd",
+    "parameters": {"n": 40, "k": 20, "w": 4, "q": 2},
+    "log2_solutions": 0
+  },
+  "targets": 8,
+  "tags": ["doom:qcsd"]
+}

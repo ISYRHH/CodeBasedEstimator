@@ -1,0 +1,10 @@
+{
+  "name": "synthetic-qccf",
+  "goal": "key_recovery",
+  "problem": {
+    "kind": "cfp",
+    "parameters": {"n": 40, "k": 20, "w": 4, "q": 2}
+  },
+  "targets": 8,
+  "tags": ["doom:qccf"]
+}

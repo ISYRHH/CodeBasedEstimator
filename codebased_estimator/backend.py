@@ -4,13 +4,65 @@ from __future__ import annotations
 
 import importlib
 from importlib import metadata
+from dataclasses import replace
+from functools import lru_cache
 import math
 from numbers import Integral, Real
 import os
 from pathlib import Path
 import subprocess
 
-from .models import AttackInstance, Estimate, Options
+from .models import AttackInstance, Estimate, Options, Problem
+from .doom_fallback import single_target_fallback
+
+
+def _m4ri_cost(n: int, k: int, r: int) -> int:
+    helper = importlib.import_module("cryptographic_estimators.SDEstimator.sd_helper")
+    return helper._gaussian_elimination_complexity(n, k, r)
+
+
+@lru_cache(maxsize=256)
+def _bounded_m4ri_r(n: int, k: int, mem=math.inf) -> int:
+    """Exactly reproduce the 2.1.1 search while pruning provably worse r.
+
+    For 0 < r < n-k the upstream integer Gaussian cost is at least 2**r.
+    Once this lower bound reaches the best cost, no remaining candidate can
+    improve it. Keep upstream's strict log2 comparison (including ties) and
+    its check of the *selected* r against mem, rather than changing its model.
+    """
+    selected, best_log, best_cost = 0, math.inf, None
+    if not selected < mem:
+        return selected
+    for candidate in range(n - k):
+        if best_cost is not None and (1 << candidate) >= best_cost:
+            break
+        cost = _m4ri_cost(n, k, candidate)
+        log_cost = math.log2(cost)
+        if best_log > log_cost and selected < mem:
+            selected, best_log, best_cost = candidate, log_cost, cost
+    return selected
+
+
+def _seed_bounded_m4ri(algorithm) -> bool:
+    """Use the reviewed shortcut only for binary Prange/Stern in 2.1.1."""
+    if type(algorithm).__name__ not in ("Prange", "Stern"):
+        return False
+    try:
+        if metadata.version("cryptographic_estimators") != "2.1.1":
+            return False
+    except metadata.PackageNotFoundError:
+        return False
+    binary = importlib.import_module("cryptographic_estimators.SDEstimator")
+    if not isinstance(algorithm, binary.SDAlgorithm):
+        return False
+    n, k, _ = algorithm.problem.get_parameters()
+    mem = algorithm.problem.memory_bound - math.log2(n - k)
+    r = _bounded_m4ri_r(n, k, mem)
+    base = importlib.import_module("cryptographic_estimators.base_algorithm")
+    # SDAlgorithm.set_parameters also disables adaptive ranges for p and l.
+    # Its base implementation preserves that upstream search behavior.
+    base.BaseAlgorithm.set_parameters(algorithm, {"r": r})
+    return True
 
 
 def _json_value(value):
@@ -64,7 +116,12 @@ def backend_info() -> dict:
 
 
 class ClassicalModel:
-    """Evaluate a single, unstructured decoding instance in bit operations."""
+    """Evaluate decoding, including binary QCSD and QCCF cost proxies.
+
+    For QCSD, Prange, Stern, Dumer and BJMM optimize explicit DOOM costs;
+    other binary algorithms use a marked square-root-of-targets approximation.
+    QCCF instead supplies log2(targets) as CE's number of codeword solutions.
+    """
 
     name = "classical"
 
@@ -112,11 +169,24 @@ class ClassicalModel:
             family, base_name = "SDFqEstimator", "SDFqAlgorithm"
         return (family, parameters, *cls._family_algorithms(family, base_name))
 
+    @staticmethod
+    def _backend_problem(instance: AttackInstance) -> Problem:
+        """Validate the built-in QCCF proxy without changing caller context.
+
+        Codeword problem kinds remain open to custom backends. Only this
+        explicitly tagged classical path interprets their parameters as SD
+        parameters and their target count as the total usable solution count.
+        """
+        if instance.tags == ("doom:qccf",):
+            return Problem("sd", dict(instance.problem.parameters),
+                           log2_solutions=math.log2(instance.targets))
+        return instance.problem
+
     def estimate(self, instance: AttackInstance, options: Options) -> list[Estimate]:
         requested = options.classical_algorithms
         if requested == ():
             return []
-        resolved = self._resolve(instance.problem)
+        resolved = self._resolve(self._backend_problem(instance))
         candidates = resolved[-1] if resolved is not None else self._known_names()
         if requested is not None:
             unknown = set(requested).difference(candidates)
@@ -134,7 +204,7 @@ class ClassicalModel:
         self, name: str, instance: AttackInstance, options: Options,
     ) -> Estimate:
         """Receive the full tagged instance before applicability checks and optimization."""
-        problem = instance.problem
+        problem = self._backend_problem(instance)
         resolved = self._resolve(problem)
         if resolved is None:
             if name != "classical" and name not in self._known_names():
@@ -145,6 +215,110 @@ class ClassicalModel:
         family, parameters, estimator_class, all_classes, candidates = resolved
         if name not in candidates:
             raise ValueError(f"Unknown or unavailable {family} algorithm: {name}")
+        if instance.tags == ("doom:qccf",):
+            if family != "SDEstimator":
+                return self._unsupported(
+                    name, instance, "The classical QCCF solution-count proxy requires binary parameters (q=2).",
+                )
+            if instance.structure:
+                return self._unsupported(
+                    name, instance,
+                    "The QCCF solution-count proxy has no reduction for additional structure: "
+                    + ", ".join(instance.structure),
+                )
+            # A fresh CE instance receives the solution count before its
+            # parameter search. Calling the base method preserves the outer
+            # algorithm hook's original tagged context, as for QCSD below.
+            try:
+                result = ClassicalModel.estimate_algorithm(
+                    self, name, replace(instance, problem=problem, tags=(), targets=1), options,
+                )
+            except OverflowError:
+                # For example, CE 2.1.1 Stern materializes 2**nsolutions
+                # as a float. Preserve the declared count instead of capping
+                # it or silently replacing an unavailable upstream estimate.
+                result = self._unsupported(
+                    name, instance,
+                    "CE exceeded its numeric range while evaluating QCCF with "
+                    f"nsolutions={problem.log2_solutions}; no finite estimate is available.",
+                )
+            return replace(
+                result,
+                assumptions=(
+                    "QCCF is estimated by CE's generic binary SD multiple-solution cost proxy; "
+                    "zero-syndrome-specific enumeration and self-collisions are not modeled.",
+                    "targets counts distinct acceptable nonzero weight-w codewords, including "
+                    "usable orbit members; orbit size and independence are not inferred.",
+                    "CE receives nsolutions=log2(targets) before optimization, replacing its "
+                    "default solution count; no additional DOOM time discount is applied.",
+                ),
+                metadata={
+                    **result.metadata,
+                    "tags": list(instance.tags),
+                    "targets": instance.targets,
+                    "effective_log2_solutions": problem.log2_solutions,
+                    "solution_count_policy": "QCCF total usable codewords: log2(targets), replacing upstream default",
+                    "heuristic": True,
+                    "doom": {
+                        "model": "ce_nsolutions",
+                        "cost_model": "ce-qccf-nsolutions-v1",
+                        "available_targets": instance.targets,
+                        "effective_log2_solutions": problem.log2_solutions,
+                        "source_problem_kind": instance.problem.kind,
+                        "backend_problem_kind": "sd",
+                        "postprocessing_speedup_applied": False,
+                    },
+                },
+            )
+        if instance.tags == ("doom:qcsd",):
+            if instance.structure:
+                return self._unsupported(
+                    name, instance,
+                    "This adapter has no reduction for structured decoding instances: "
+                    + ", ".join(instance.structure),
+                )
+            # Keep each syndrome's solution count unchanged. This internal
+            # single-target baseline is not another requested algorithm hook.
+            baseline = ClassicalModel.estimate_algorithm(
+                self, name, replace(instance, tags=(), targets=1), options,
+            )
+            if family != "SDEstimator":
+                return single_target_fallback(
+                    baseline, instance,
+                    "Classical nonbinary QCSD DOOM is not implemented; "
+                    "using the single-target SD baseline without DOOM.",
+                )
+            if name in ("Prange", "Stern", "Dumer", "BJMM"):
+                from .classical_doom import estimate_doom
+
+                return estimate_doom(name, instance, options, baseline)
+            speedup = 0.5 * math.log2(instance.targets)
+            time = baseline.time_log2
+            computed = (baseline.status == "computed" and time is not None
+                        and math.isfinite(time))
+            adjusted_time = max(0.0, time - speedup) if computed else time
+            return replace(
+                baseline,
+                time_log2=adjusted_time,
+                assumptions=(
+                    "Generic unstructured binary decoding; upstream classical cost model.",
+                    "QCSD uses a sqrt(M) time-speedup approximation for usable syndrome "
+                    "targets under one matrix; algorithm parameters and memory are unchanged.",
+                    "This approximation does not model target correlations or "
+                    "algorithm-specific multi-target list costs.",
+                ),
+                metadata={
+                    **baseline.metadata,
+                    "tags": list(instance.tags),
+                    "targets": instance.targets,
+                    "doom": {
+                        "model": "sqrt_targets_approximation",
+                        "available_targets": instance.targets,
+                        "log2_speedup": speedup,
+                        "realized_log2_speedup": time - adjusted_time if computed else None,
+                    },
+                },
+            )
         if instance.tags:
             reasons = {
                 "doom:qccf": "QCCF requires an algorithm-specific model of available codeword solutions/orbit candidates.",
@@ -215,6 +389,11 @@ class ClassicalModel:
         if len(algorithms) != 1 or type(algorithms[0]).__name__ != name:
             raise RuntimeError("Upstream algorithm selection did not match the requested algorithm.")
         algorithm = algorithms[0]
+        if family == "SDEstimator" and _seed_bounded_m4ri(algorithm):
+            details["gaussian_elimination_search"] = (
+                "exact bounded equivalent of upstream 2.1.1 _optimize_m4ri; "
+                "other parameter ranges remain adaptive"
+            )
         time = algorithm.time_complexity()
         memory = algorithm.memory_complexity()
         optimized = _json_value(algorithm.get_optimal_parameters_dict())

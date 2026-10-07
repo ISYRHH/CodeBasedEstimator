@@ -7,6 +7,11 @@ from math import isfinite
 from numbers import Real
 from typing import Any, Optional, Protocol
 
+from .matrix_costs import DEFAULT_MATRIX_PROFILE, validate_profile
+
+
+QUANTUM_ALGORITHMS = ("QPrange", "QSS", "QMMT+")
+
 
 def _nonnegative(value: float, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -25,10 +30,15 @@ def _strings(values, name: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Problem:
-    """sd: (n,k,w,q); rank_sd: (q,m,n,k,r). Other kinds need custom models.
+    """sd: (n,k,w,q); rank_sd: (q,m,n,k,r).
 
-    log2_solutions describes solutions of ONE syndrome, never DOOM targets.
-    None preserves the backend's default; 0 means one solution.
+    cfp/qccf support tagged classical and quantum solution-count proxies; other routes
+    for these problem kinds, and other kinds, require custom models.
+
+    log2_solutions describes solutions of ONE syndrome, never distinct syndrome
+    targets. None preserves the classical SD backend's default and means one
+    solution for quantum models; 0 means one solution.
+    Tagged QCCF instead supplies its codeword count through AttackInstance.targets.
     """
 
     kind: str
@@ -74,8 +84,11 @@ class AttackInstance:
     tags are passed to algorithms BEFORE parameter optimization. DOOM tags:
       doom:qccf -- targets counts usable nonzero codeword/orbit candidates;
       doom:qcsd -- targets counts usable syndrome targets under one matrix.
-    Neither tag implies independence, a universal speedup, or a conversion to
-    log2_solutions. Each algorithm must implement the corresponding semantics.
+    Neither tag implies independence or a universal speedup. The built-in
+    classical QCCF proxy maps its total usable codeword count to CE nsolutions;
+    the quantum QCCF proxy uses it in the outer success probability and excludes
+    the direct zero-codeword branch.
+    QCSD targets remain separate from each syndrome's log2_solutions.
     """
 
     name: str
@@ -129,11 +142,16 @@ class AttackInstance:
 
 @dataclass(frozen=True)
 class Options:
-    """Independent selections: None means all classical, () disables a family."""
+    """Default to all upstream classical and registered quantum candidates.
+
+    None selects each problem family's upstream classical defaults; an empty
+    tuple explicitly disables either family.
+    """
 
     classical_algorithms: Optional[tuple[str, ...]] = None
-    quantum_algorithms: tuple[str, ...] = ()
+    quantum_algorithms: tuple[str, ...] = QUANTUM_ALGORITHMS
     memory_bound_log2_bits: Optional[float] = None
+    quantum_matrix_profile: str = DEFAULT_MATRIX_PROFILE
 
     def __post_init__(self):
         for field_name in ("classical_algorithms", "quantum_algorithms"):
@@ -146,6 +164,7 @@ class Options:
             object.__setattr__(self, field_name, names)
         if self.memory_bound_log2_bits is not None:
             _nonnegative(self.memory_bound_log2_bits, "memory_bound_log2_bits")
+        validate_profile(self.quantum_matrix_profile)
 
 
 @dataclass(frozen=True)
@@ -165,6 +184,14 @@ class Estimate:
     references: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def is_time_only_quantum(self) -> bool:
+        """Recognize the explicit exception to memory-feasibility comparisons."""
+        return (self.model == "quantum"
+                and self.metadata.get("resource_scope") == "time_only"
+                and self.memory_log2 is None
+                and self.memory_unit == "not_estimated")
+
 
 class AttackModel(Protocol):
     """A classical or quantum backend, owning algorithm-specific optimization.
@@ -180,7 +207,7 @@ class AttackModel(Protocol):
 
 @dataclass(frozen=True)
 class Conclusion:
-    """Minimum-time feasible estimates within one model; retain exact ties."""
+    """Minimum-time eligible estimates within one model; retain exact ties."""
 
     status: str
     best: tuple[Estimate, ...] = ()
@@ -196,7 +223,7 @@ class Report:
 
     @property
     def conclusions(self) -> dict[str, Conclusion]:
-        """Compare only finite, feasible costs within each requested family.
+        """Compare finite costs within each family's declared resource scope.
 
         These are minima of the evaluated results, not global optimality claims.
         In particular, quantum and classical units are never compared.
@@ -211,16 +238,28 @@ class Report:
             eligible = [
                 row for row in rows
                 if row.status == "computed"
-                and all(isinstance(value, Real) and not isinstance(value, bool) and isfinite(value)
-                        for value in (row.time_log2, row.memory_log2))
-                and all(isinstance(unit, str) and unit.strip() and unit != "unspecified"
-                        for unit in (row.time_unit, row.memory_unit))
-                and (bound is None or (row.memory_unit == "bits" and row.memory_log2 <= bound))
+                and isinstance(row.time_log2, Real) and not isinstance(row.time_log2, bool)
+                and isfinite(row.time_log2)
+                and isinstance(row.time_unit, str) and row.time_unit.strip()
+                and row.time_unit != "unspecified"
+                and (row.is_time_only_quantum or (
+                    isinstance(row.memory_log2, Real) and not isinstance(row.memory_log2, bool)
+                    and isfinite(row.memory_log2)
+                    and isinstance(row.memory_unit, str) and row.memory_unit.strip()
+                    and row.memory_unit != "unspecified"
+                    and (bound is None or (row.memory_unit == "bits" and row.memory_log2 <= bound))
+                ))
             ]
             if not eligible:
+                reason = (
+                    "No computed finite time estimate is available in declared units; "
+                    "time-only quantum estimates do not assess memory feasibility."
+                    if any(row.is_time_only_quantum for row in rows) else
+                    "No computed finite estimate in declared units satisfies "
+                    "the memory constraint; see individual algorithm results."
+                )
                 conclusions[family] = Conclusion(
-                    "unavailable", reason="No computed finite estimate in declared units satisfies "
-                    "the memory constraint; see individual algorithm results.",
+                    "unavailable", reason=reason,
                 )
                 continue
             if len({row.time_unit for row in eligible}) != 1:
@@ -230,10 +269,16 @@ class Report:
                 )
                 continue
             minimum = min(row.time_log2 for row in eligible)
+            resource_note = (
+                "finite times and declared units; time-only quantum estimates have no memory "
+                "estimate, and the memory bound is not applied to them; limited to this evaluation."
+                if any(row.is_time_only_quantum for row in eligible) else
+                "finite costs, declared units and feasible memory; limited to this evaluation."
+            )
             conclusions[family] = Conclusion(
                 "computed", best=tuple(row for row in eligible if row.time_log2 == minimum),
                 reason=f"Minimum time among {len(eligible)}/{len(rows)} returned estimates with "
-                "finite costs, declared units and feasible memory; limited to this evaluation.",
+                + resource_note,
             )
         return conclusions
 
