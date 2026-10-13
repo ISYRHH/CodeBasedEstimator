@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 import sys
 from pathlib import Path
@@ -76,6 +76,29 @@ def _hamming_summary(reports):
     print("Use --details for per-algorithm rows; --no-brief for assumptions and sources.")
 
 
+def _hamming_routes(instances, *, as_json=False):
+    """List mapped input problems without invoking a cost estimator."""
+    if as_json:
+        records = [{
+            "scheme": i.scheme, "parameter_set": i.parameter_set, "goal": i.goal,
+            "problem": asdict(i.problem), "tags": list(i.tags), "targets": i.targets,
+        } for i in instances]
+        print(json.dumps(records, indent=2, ensure_ascii=False, allow_nan=False))
+        return
+    print(f"{'parameter set':21} {'goal':12} {'problem':23} parameters")
+    for i in instances:
+        problem = next((tag.split(":", 1)[1].upper() for tag in i.tags
+                        if tag.startswith("doom:")), i.problem.kind.upper())
+        if i.problem.kind == "structural_key_recovery":
+            problem, parameters = "structural_key_recovery", "unavailable"
+        else:
+            p = {**i.problem.parameters, "targets": i.targets}
+            if i.problem.log2_solutions is not None:
+                p["log2_solutions"] = i.problem.log2_solutions
+            parameters = ", ".join(f"{name}={value}" for name, value in p.items())
+        print(f"{i.parameter_set:21} {i.goal:12} {problem:23} {parameters}")
+
+
 def _table(reports, *, brief=True):
     print("Costs are log2 in the units shown for each row; '--' means unavailable.")
     if not brief:
@@ -145,7 +168,9 @@ def main(argv=None) -> int:
     hamming.add_argument("--goal", choices=("both", "key_recovery", "msg_recovery"), default="both")
     hamming.add_argument("--doom", choices=DOOM_MODES, default="auto",
                          help="auto: documented QCCF/QCSD orbit proxies; none: original single-target SD baseline")
-    hamming.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
+    listing = hamming.add_mutually_exclusive_group()
+    listing.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
+    listing.add_argument("--list-routes", action="store_true", help="list key/msg recovery problems and mapped parameters without running estimators")
     hamming.add_argument("--all-classical", action="store_true", help="use all upstream classical algorithms per field (already the default)")
     hamming.add_argument("--details", action="store_true", help="print per-algorithm tables; use --no-brief for assumptions and sources")
     hamming.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
@@ -183,6 +208,11 @@ def main(argv=None) -> int:
                 raise ValueError("--all-classical and --classical-algorithms are mutually exclusive")
             if args.csv and args.details:
                 raise ValueError("--csv and --details select different output formats; choose one")
+            if args.list_routes:
+                if args.csv:
+                    raise ValueError("--csv requires estimation; use --list-routes --json for the route catalogue")
+                _hamming_routes(instances, as_json=args.json)
+                return 0
             if args.list:
                 if args.csv:
                     raise ValueError("--csv requires estimation; use --list --json for the source catalogue")
