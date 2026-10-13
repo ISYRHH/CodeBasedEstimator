@@ -56,6 +56,9 @@ QCCF 的解数由 `targets` 提供，必须省略此字段。普通 SD 省略时
 `--list` 列出原始参数；`--list-routes` 列出全部 42 个参数集的 key/msg recovery 路线，每行仅显示参数集、恢复目标、问题类型（SD/QCSD/QCCF）和映射后的参数，不运行估计器。QCTM、UVW-KEM 的密钥路线显示为 `structural_key_recovery unavailable`。支持 `--schemes`、`--parameter-sets`、`--goal`、`--doom none` 筛选／切换，以及 `--json` 导出问题、标签和目标数。
 
 `--goal` 可选 `key_recovery`、`msg_recovery` 或 `both`；`--schemes` 可筛选方案，`--csv` 可导出结果。
+
+Mito/QUBE 的参数来源、字段含义及勘误见[参数一致性](docs/parameter_consistency.md)。
+
 内置路线默认使用 `--doom auto`，按各方案的完整公开方程设置 DOOM 上下文：
 
 | 方案 | key recovery | msg recovery | `targets` |
