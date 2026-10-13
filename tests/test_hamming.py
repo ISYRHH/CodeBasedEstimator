@@ -12,6 +12,7 @@ import pytest
 from codebased_estimator import AttackInstance, Estimate, Options, Problem, Report, estimate
 from codebased_estimator.__main__ import main
 from codebased_estimator.hamming import (
+    COMPOSITE_MSG_SCHEMES,
     HAMMING_SCHEMES,
     HammingScheme,
     hamming_catalogue,
@@ -109,7 +110,8 @@ def test_every_submission_instance_has_the_reference_decoding_tuple(scheme, para
     n, key_k, key_w, msg_k, msg_w, q = expected
     for goal, k, w in (("key_recovery", key_k, key_w), ("msg_recovery", msg_k, msg_w)):
         instances = HammingScheme(scheme).instances(parameter_set, goal, doom=doom)
-        assert len(instances) == 1
+        multiple = (goal == "msg_recovery" and scheme in COMPOSITE_MSG_SCHEMES) or (goal == "key_recovery" and scheme == "Mito")
+        assert len(instances) == (2 if multiple else 1)
         attack = instances[0]
         assert (attack.scheme, attack.parameter_set, attack.goal) == (scheme, parameter_set, goal)
         assert attack.structure == ()
@@ -155,7 +157,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert copied["parameters"]["wx"] == [44, 41]
     assert copied["references"]
     attacks = hamming_instances()
-    assert len(attacks) == len({attack.name for attack in attacks}) == 84
+    assert len(attacks) == len({attack.name for attack in attacks}) == 119
 
 
 def test_batch_filters_goals_and_removes_duplicate_scheme_selections():
@@ -279,6 +281,7 @@ def test_cli_csv_has_numeric_costs_only_for_available_routes(capsys):
         "memory_unit", "is_best", "reason", "cost_model", "matrix_profile", "matrix_block_size",
         "problem_kind", "doom", "targets", "active_targets",
         "effective_doom", "effective_targets",
+        "route_id", "instance_name", "is_best_route", "cost_proxy",
     }
     keys = [row for row in records if row["goal"] == "key_recovery"]
     messages = [row for row in records if row["goal"] == "msg_recovery"]

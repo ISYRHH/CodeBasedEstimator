@@ -1,276 +1,155 @@
 # 成本模型
 
-本项目分别调用经典后端和量子模型，报告所选算法及译码路线的成本，不将其直接视为整个密码方案的安全位数。
+本项目估计指定译码路线的成本，经典与量子分别比较。以下均为有限参数成本模型或明确标记的代理，不构成方案安全下界。参数来源见[参数确认](parameter_consistency.md)，用法见 [README](../README.md)。
 
-## 经典后端与适用范围
+## 输入与适用范围
 
-经典二元 SD、多元 SD、Rank SD 分别委托 CryptographicEstimators 2.1.1 的 `SDEstimator`、`SDFqEstimator`、`RankSDEstimator`。采用有限复杂度、位复杂度和常数内存访问模型；时间单位为位操作，内存单位为 bits，均输出 $\log_2$ 值。普通单目标路线保留 CE 成本和参数搜索；Rank SD 不接受显式解数。经典 QCSD 和 QCCF 使用以下不同的 DOOM 模型。
-
-## 经典 DOOM 接口
-
-QCSD 和 QCCF 均使用 `AttackInstance` 的 `tags` 和正整数 `targets=M` 传递 DOOM 上下文，在各经典算法内部处理。加速模型的输入参数为 $n,k,w,q$，要求二元域（省略 $q$ 时取 2）、$0<k<n$ 和 $1\le w\le n-k$；非二元 QCSD 的单目标回退见下文。
-
-| 输入项 | QCSD | QCCF |
+| 后端 | 支持范围 | 时间／内存单位 |
 |---|---|---|
-| `problem.kind` | `sd` | `cfp`（也接受 `qccf`） |
-| `tags` | `["doom:qcsd"]` | `["doom:qccf"]` |
-| `targets=M` | 同一矩阵下可用的 syndrome 数量 | 不同、可用的非零重量 $w$ 码字总数 |
-| `problem.log2_solutions` | 每个 syndrome 的解数对数；`0` 表示单解，省略时使用 CE 默认值 | 必须省略；由 `targets` 设置 CE 的对数解数 |
+| 经典 | CE 2.1.1 的二元 SD、多元 SD、Rank SD；下述 QCSD/QCCF 代理 | `bit_operations`／`bits` |
+| 量子 | 二元 SD 的 QSS、QMMT+；下述 QCCF 代理 | `quantum_bit_operations`／未估计 |
 
-JSON 输入格式及运行命令见 [README](../README.md#命令行)。`estimate` 子命令的 `--doom qcsd`／`--doom qccf` 可添加对应标签（已有标签须一致），`--targets M` 可覆盖数量。两种机制的 $M$ 均由调用方提供，成本后端不从 QC 轨道自动推导数量或独立性，重复轨道元素不能重复计数。内置 `hamming` 适配器默认根据下述方案映射提供轨道数量。额外标签、结构约束和非二元 DOOM 不受支持；其中仅含 `doom:qcsd` 标签、无额外结构的非二元 `sd` 输入，经典后端自动退回普通单目标 SDFq，保留有限域、每综合征解数及内存上限，并报告 `single_target_fallback`。非二元 QCCF 没有可用的非零码字基线，仍不支持。`qcsd` 问题类型仍留给自定义模型。
+成本均输出 $\log_2$。经典采用有限复杂度、位复杂度和常数内存访问模型；内存上限只约束经典。量子采用抽象相干访问和归一化操作预算，不表示完整电路门数。QPrange 尚未实现。
 
-### QCSD：多 syndrome 调参模型
+`AttackInstance` 描述一条恢复路线。`Problem("sd", ...)` 使用 $(n,k,w,q)$，要求 $0<k<n$、$1\le w\le n-k$；Rank SD 使用 $(q,m,n,k,r)$，不接受显式解数。`structure` 表示必须由专用模型处理的约束，内置通用后端不会忽略它；`cost_proxy` 仅描述已选近似的来源，不改变调度或放宽检查。
 
-`targets` 与**每个 syndrome** 的 `log2_solutions` 分别计数，不能将 $\log_2M$ 再加入后者。
+| 机制 | `problem.kind` / `tags` | `targets=M` | `log2_solutions` |
+|---|---|---|---|
+| 普通 SD | `sd` / 无 | `1` | 每个综合征的可接受解数对数 |
+| QCSD | `sd` / `doom:qcsd` | 同一矩阵下不同、可用的综合征数 | 与目标数分开计数 |
+| QCCF | `cfp` 或 `qccf` / `doom:qccf` | 不同、可用的非零重量 $w$ 码字数 | 必须省略；由 `targets` 提供 |
 
-Prange、Stern、Dumer、BJMM 使用 `ce-doom-finite-v1` 调参模型。设 $m=n-k$、$S$ 为每个 syndrome 的解数、$P_0$ 为一个解满足重量分布的概率，选择实际使用的目标数 $1\le u\le M$。一次迭代的成功率代理、位操作成本及内存为
+普通 SD 的 `log2_solutions=0` 表示单解；省略时经典使用 CE 默认解数，量子按单解处理。QCSD 不把 $\log_2M$ 再加入解数。轨道数量、可用性和相关性均须由路线说明，后端不会自动证明。
+
+仅含 `doom:qcsd` 且无额外结构时，经典非二元输入回退为单目标 SDFq，量子二元输入回退为单目标 SD；保留每综合征解数、矩阵配置及适用的内存约束，不计 DOOM 加速。回退由 `metadata.doom.model="single_target_fallback"`、`effective_tags=[]`、`effective_targets=1` 标识。非二元 QCCF、量子非二元／Rank SD、未知标签或结构仍不支持。
+
+## 经典成本
+
+普通单目标路线调用 [CE 后端](../codebased_estimator/backend.py)。二元 DOOM 在优化前按目标语义分派：
+
+| 机制／算法 | 处理方式 |
+|---|---|
+| QCSD：Prange、Stern、Dumer、BJMM | `ce-doom-finite-v1`，联合优化算法参数、消元块宽及实际目标数 $1\le u\le M$ |
+| QCSD：其余二元经典算法 | `sqrt_targets_approximation`，从 CE 时间减去 $\frac12\log_2M$，最低为 0；参数和内存不变 |
+| QCCF：二元经典算法 | 优化前设置 CE 的 `nsolutions=log2(M)`，替换默认解数，不再叠加目标折扣 |
+
+显式 QCSD 模型令 $m=n-k$、$S$ 为每综合征解数、$P_0$ 为一个解命中所选重量分布的概率：
 
 $$
 P_{\rm succ}=\min(1,uSP_0),\qquad
-W=n(G+W_{\rm shared}+uW_{\rm target})+(u-1)m^2,
+T=\frac{n(G+W_{\rm shared}+uW_{\rm target})+(u-1)m^2}{P_{\rm succ}},
 $$
 $$
-B=n(B_{\rm matrix}+B_{\rm shared}+uB_{\rm target})+(u-1)m,
-\qquad T=W/P_{\rm succ}.
+B=n(B_{\rm matrix}+B_{\rm shared}+uB_{\rm target})+(u-1)m.
 $$
 
-$G,B_{\rm matrix}$ 采用 CE 的高斯消元与矩阵存储预算，列表项按 CE 的向量口径乘 $n$ 转为位操作或 bits。第一份 syndrome 已包含在 CE 基线中；额外 $u-1$ 份各计 $m^2$ 位操作的稠密线性变换及 $m$ bits 存储。列表显式存储，$B$ 受经典内存上限约束。固定列表参数时，$W,B$ 随 $u$ 仿射增长；搜索检查内存允许的端点及成功率饱和点相邻的整数，避免盲目使用全部目标。
+$G,B_{\rm matrix}$ 使用 CE 矩阵预算；第一份综合征已包含在基线中，其余各计 $m^2$ 位操作及 $m$ bits。Prange 无列表项；Stern/Dumer 共享一侧列表，另一侧按目标展开；BJMM 采用两层表示、仅第四张底层列表附带目标。列表大小及匹配数用有限组合数和均值定价。
 
-Prange 使用 $P_0=\binom mw/\binom nw$，没有列表项，优化目标批量与 CE 消元块宽。Stern 和 Dumer 分别取 $K=k$ 和 $K=k+\ell$，令 $h_0=\lfloor K/2\rfloor$、$h_1=K-h_0$，允许两个半区采用不同重量 $p_L,p_R$：
+$M=1$ 返回原 CE 结果，$M>1$ 也保留单目标候选。大实例采用有预算的确定性搜索，`metadata.doom.search` 记录范围与停止原因，`active_targets` 记录实际使用数量。公式、边界及定点重放见 [classical_doom.py](../codebased_estimator/classical_doom.py) 与 [doom_bjmm.py](../codebased_estimator/doom_bjmm.py)；构造依据为 [Sendrier §5](https://eprint.iacr.org/2011/367) 和 [Esser–May–Zweydinger §5.1](https://eprint.iacr.org/2021/1634)。目标相关性和有限多项式价格均属模型假设。
 
-$$
-A=\binom{h_0}{p_L},\quad D=\binom{h_1}{p_R},\quad
-P_0=\frac{AD\binom{m-\ell}{w-p_L-p_R}}{\binom nw},
-$$
-$$
-W_{\rm shared}=B_{\rm shared}=A,\qquad
-W_{\rm target}=D+AD/2^\ell,\qquad B_{\rm target}=D.
-$$
+经典 QCCF 仍是通用 SD 多解代理：零综合征下 Prange 的 $p=0$ 分支退化为零码字，自身碰撞及排除费用未专门定价，不能将结果解释为已证明的非零码字搜索成本。
 
-列表匹配计期望碰撞数，优化 $\ell,p_L,p_R$，因此 DOOM 收益取决于重新选择的列表大小、重量和匹配位数。该构造依据 [Sendrier, *Decoding One Out of Many*, §5、式 (8)](https://eprint.iacr.org/2011/367)；这里的有限多项式价格是本项目的建模选择。
+## 量子成本
 
-BJMM 的显式 DOOM 分支采用两层结构，仅第四张底层列表附带目标。设 $K=k+\ell$，两个半区长度为 $h_0,h_1$；输出半区重量为 $p,p-z$，四张底层列表重量为 $p_1,p_1,p_1,p_1-z$，其中 $z$ 对应 `weight_deficit`，$p$ 为偶数。有限半区表示数与匹配位数为
+QSS/QMMT+ 对随机满行秩二元矩阵估计单目标时间，分别优化直接、完整列表和量子游走分支。令 $m=n-k$、$K=k+\ell$、$r=m-\ell$；本节 $r$ 为消元尾部长度，$d$ 为 QMMT+ 表示中的额外重量，与后文方案参数含义不同。
 
-$$
-R=\binom p{p/2}\binom{h_0-p}{p_1-p/2}
-  \binom{p-z}{p/2}\binom{h_1-p+z}{p_1-p/2},\qquad
-\ell_1=\min(\ell,\lfloor\log_2R\rfloor).
-$$
+| 算法 | 叶列表大小 $V$ | 重量命中概率 $P$ | 表示数 $R$ |
+|---|---|---|---|
+| QSS | $\binom{K/4}{p/4}$ | $V^4\binom r{w-p}/\binom nw$ | $1$ |
+| QMMT+ | $\binom{K/2}{p/4+d/2}$ | $\binom{K/2}{p/2}^2\binom r{w-p}/\binom nw$ | $\left[\binom{p/2}{p/4}\binom{(K-p)/2}{d/2}\right]^2$ |
 
-令 $A=\binom{h_0}{p_1}$、$C=\binom{h_1}{p_1}$、$D=\binom{h_1}{p_1-z}$。中间列表及顶层输出采用均值 $X=AC/2^{\ell_1}$、$Y=AD/2^{\ell_1}$、$Z=XY/2^{\ell-\ell_1}$，不将小于 1 的均值向上取整。哈希合并使用 $a+b+ab/2^j$ 的向量成本，得到
-
-$$
-W_{\rm shared}=2A+C+2X,\quad W_{\rm target}=D+2Y+Z,\qquad
-B_{\rm shared}=A+C+X,\quad B_{\rm target}=D+Y,
-$$
-$$
-P_0=\frac{\binom{h_0}p\binom{h_1}{p-z}\binom{m-\ell}{w-2p+z}}{\binom nw}.
-$$
-
-优化 $\ell,p,p_1,z$，目标扩展由 $uD,uY$ 体现。构造依据 [Esser–May–Zweydinger, *McEliece needs a Break*, §2、§5.1](https://eprint.iacr.org/2021/1634)，有限半区计数延续 CE BJMMd2 的划分方式。$\ell_1$ 只保证期望表示数至少为 1，不保证每个目标都存在存活表示；模型保留随机标签和表示法的启发式假设，也不计目标间相关性。显式存储预算可能高于论文的流式实现。
-
-四个算法在 $M=1$ 时完全返回原有 CE 时间、内存和参数。$M>1$ 时继续保留该单目标候选；BJMM 的 CE 两层／三层基线也参与比较，因此选择忽略额外目标不会产生更差成本。小实例在预算内枚举，较大实例使用确定性网格和整数局部细化；结果中的 `metadata.doom.search` 记录搜索范围、预算与停止信息，不宣称一般实例的全局最优。`active_targets` 记录最终使用的目标数，`strategy` 区分显式 DOOM 和单目标基线。
-
-BothMay、MayOzerov 以及其余二元经典算法使用 `sqrt_targets_approximation`：
-
-$$
-\log_2T_{\rm DOOM}=\max(0,\log_2T_{\rm CE}-\tfrac12\log_2M).
-$$
-
-此近似不重新调参，也不改变内存或不可行状态；`log2_speedup` 记录名义加速，`realized_log2_speedup` 记录截断后的实际差值。它不建模目标相关性、额外变换或算法专用的多目标列表费用。
-
-实现及参数点重放见 [DOOM 成本与搜索](../codebased_estimator/classical_doom.py) 的 `evaluate_parameters`，BJMM 有限计数见 [BJMM DOOM](../codebased_estimator/doom_bjmm.py)。这些均为随机实例下的成本近似，不是安全下界或实测运行时间。
-
-### QCCF：多解成本代理
-
-这里 $M$ 计数满足 $Hc^{\mathsf T}=0$、$\operatorname{wt}(c)=w$ 的**不同、可用非零码字**，包括调用方确认可用的轨道成员。
-
-该分支在 CE 初始化和参数优化之前设置
-
-$$
-\texttt{nsolutions}=\log_2M.
-$$
-
-这是 CE 的对数解数参数，替换其默认期望解数，不与默认值相加。为避免重复计数，输入不得同时指定 `log2_solutions`。Prange、Stern、Dumer、BJMM、BothMay、MayOzerov 等全部二元经典算法均按这一解数重新运行各自的 CE 优化，内存限制仍由 CE 处理；因最优参数可能改变，时间和内存均可能改变。输出不再额外除以 $M$ 或 $\sqrt M$，也不走 QCSD 的多 syndrome 列表模型。
-
-原始报告保留 `cfp`／`qccf` 类型、标签及 `targets`。`metadata.doom.model="ce_nsolutions"`、`metadata.doom.cost_model="ce-qccf-nsolutions-v1"` 标识这一路线，`effective_log2_solutions` 记录实际传入的 $\log_2M$。适配实现见 [经典后端](../codebased_estimator/backend.py)。
-
-这是通用 SD 的多解成本代理，尚未实现专门的零 syndrome 非零码字搜索成本。特别是，经典 Prange 的 $p=0$ 分支在零 syndrome 下会退化为零码字；表示法中的自身碰撞及其排除费用也未重新建模。因此 CE 返回的有限结果表示该代理的成本，不证明对应参数能按相同成本找到非零码字。量子 QCCF 的处理见下文。
-
-## 内置 Hamming 方案的 DOOM 映射
-
-`hamming` CLI 与 `HammingScheme.instances`／`hamming_instances` 默认 `doom="auto"`。适配器保持 `HammingISD.md` 的 $(n,k,w,q)$，仅按公开方程区分目标语义，在算法优化前设置类型、标签及 `targets`。以下 $r$ 是基础循环块长，Mito 的 $d=2^\ell$ 是环坐标数；QCTM 的 $\ell$ 是另一含义的自同构阶数。
-
-| 方案 | 密钥路线 | 消息路线 | 目标数 $M$ | 本地原始说明书依据（PDF 页码） |
-|---|---|---|---|---|
-| BIKE_MLThre | QCCF，`cfp` | QCSD，`sd` | $r$ | `BIKE_MLThre.pdf` pp.4–5 KeyGen/Encaps、pp.26–27 §3.2.1 |
-| TRIKE | QCCF，`cfp` | QCSD，`sd` | $r$ | `TRIKE算法文档.pdf` p.6 算法1–2、p.26 §5.1 |
-| HARE | QCSD | 完整 `u` 的 QCSD | $r$ | `HARE算法文档.pdf` pp.9–10 算法3–5、p.19 §7.3.3 |
-| NSS-HQC | QCSD | 完整 `u` 的 QCSD | $r$ | `NSS-HQC算法文本.pdf` pp.17–20 算法1–2、式(32)/(36)、pp.36–37 §4.4 |
-| TriQ-KEM | QCSD | 完整 `u` 的 QCSD | $r$ | `Algorithm specifications.pdf` p.8 加密方程、p.21 式(13) |
-| QUBE | 两条公钥综合征组成的 QCSD | 完整 `u` 的 QCSD | $r$ | `Algorithm specifications.pdf` pp.13–14 式(2)/(3)、p.22 定理4 |
-| Mito | 完整 QDSD 的多综合征代理 | 完整 `u` 的同类代理 | $dr$ | `Algorithm Specification.pdf` PDF p.51（印刷 p.50）§4.3.1、表4.7 |
-| QCTM | 仍未实现 | QCSD | $\ell=19$ | `Algorithm_Text_en.pdf` pp.11–12 MatGen、p.16 定义3、pp.18–19 |
-| UVW-KEM | 仍未实现 | 普通多元 SD | $1$ | `UVW-KEM.pdf` 未给出可公开使用的 QC 目标轨道 |
-
-各说明书均在 `local/HammingSchemes/<方案>/Algorithm specifications/`；逐实例 `references` 记录完整路径，包运行不依赖未跟踪的 `local/` 文件。
-
-BIKE/TRIKE 密钥的 $M$ 表示同一零综合征下的非零秘密移位，使用 `doom:qccf` 并省略 `log2_solutions`，不再添加多综合征折扣。BIKE 的秘密块 $h_0$ 可逆，因而其 $r$ 个移位互不相同。其余完整轨道数量作为参数快照的建模假设，不表示已检查具体公钥/综合征的稳定子或目标独立性；若实际轨道较短，应构造相同类型的显式 `AttackInstance` 并减少 `targets`。
-
-QCSD 路线使用 `doom:qcsd`、`log2_solutions=0`，即每个综合征指定一个可接受解。循环关系 $HP_j=Q_jH$ 允许在同一矩阵下解任一 $Q_js$，然后逆移位回原问题；$r$ 个移位须同时作用于所有相关块，不能按块数再乘一次目标数。HARE、NSS-HQC、TriQ-KEM、Mito、QUBE 的密钥也是带给定综合征的搜索，不因名为密钥恢复而改成 QCCF。NSS-HQC 的轨道是从完整公开方程推导的，本项目不声称其说明书已经扣除了 DOOM 收益。
-
-Mito 采用 $C_r\times(C_2)^\ell$ 的完整作用，$M=dr$；群作用会置换块重量标签，保留总重量。这里把其目标集合传给通用 QCSD 成本代理，不计折叠及恢复原块的结构攻击。QCTM 采用 $M=19$，不按码长或块数推算；变换必须保留 hybrid 校验空间的普通尾部行。
-
-上述消息 `u` 路线只估计临时稀疏量恢复，仍需公开译码、解压和候选验证；完整轨道数量不自动适用于截断、压缩或投影后的联合密文。分块重量、拒绝采样及后处理仍沿用已声明的简化，不另加 Unbalanced/CombGap 折扣。
-
-`doom="none"`（CLI `--doom none`）恢复原 `sd`、`targets=1`、`log2_solutions=0`、无标签的基线，包括 BIKE/TRIKE 密钥的普通 SD 代理。它不是单码字 QCCF 的专用成本。量子 QCSD 自动回退至单目标 SD，量子 QCCF 则继续使用已有非零码字多解代理及其限制。JSON 保留完整输入上下文；CSV 的 `problem_kind`、`doom`、`targets` 记录输入，`effective_doom`／`effective_targets` 记录实际使用的上下文，`active_targets` 在经典显式 QCSD 调参模型及上述回退中提供。
-
-## 量子适用范围
-
-量子实现 QSS 和 QMMT+，面向随机满行秩矩阵下的普通二元、单目标 SD：$He^{\mathsf T}=s$、$\operatorname{wt}(e)=w$，整数输入满足 $0<k<n$、$1\le w\le n-k$。支持通过外层成功概率建模的多解，以及相同口径的 QCCF 非零码字成本代理。非二元、Rank SD、QCSD 多 syndrome 和其他结构专用量子模型不在此范围。
-
-对于仅含 `doom:qcsd` 标签、没有额外结构的二元 `sd` 输入，DOOM 未实现时自动取其中一个综合征，使用普通单目标模型重新优化。原 `log2_solutions` 表示该综合征的解数，保持不变；目标数不混入解数，也不折扣最终时间。矩阵配置和其他选项沿用输入。因此 QSS/QMMT+ 的结果与相同参数、相同每综合征解数的无 DOOM 调用一致。此回退不实现 QPrange，也不去除未知标签、结构约束或非零码字限制；无可行候选仍为 `infeasible`。
-
-报告保留原实例的标签与目标数；回退行的 `metadata.doom.model="single_target_fallback"`、`applied=false`、`active_targets=1`，并给出原因。`metadata.effective_tags=[]`、`effective_targets=1` 标明实际成本来自无 DOOM 的单目标路线。文本结果和 CSV 的 `reason` 同时说明回退，避免将此量子成本误读为多目标加速。
-
-普通 SD 中 `log2_solutions=0` 指定单解；省略或 `null` 时，量子仍按单解处理，经典使用上游默认解数。比较同一单解问题时应显式指定 `0`。内置 Hamming 的默认上下文见上节；仅 `doom="none"` 统一采用原单目标 SD 近似。
-
-显式 `log2_solutions=s` 表示 $M=2^s$ 个可接受解，取任意一个即成功，语义与 CE 的 `nsolutions` 一致。CLI 的 `estimate --log2-solutions s`（别名 `--nsolutions s`）覆盖该字段。解数必须是有限、非负的对数；不会再叠加 CE 的默认期望解数。
-
-QCCF 使用同一 `cfp`／`qccf`、`doom:qccf`、`targets=M` 接口，在优化前设置 $s=\log_2M$，保留原实例类型和数量，不额外叠加多目标或最终时间折扣。输入必须省略 `log2_solutions`。量子 QCCF 排除 $p=0$ 直接分支，因为零 syndrome 与尾部满列秩会使该分支仅得到零码字；其余候选仍按通用 SD 代理定价。轨道相关性、零 syndrome 下自身碰撞及其排除费用未完整建模，因此结果不是专用非零码字搜索复杂度证明。`QPrange` 仍未实现。
-
-量子仅估计时间，不估计内存，也不使用经典内存上限筛选参数。一次长度至多为 $n$ 的向量操作归一计为 1，重复预算乘 $n$ 转为位操作；输出 `time_log2` 的单位为 `quantum_bit_operations`。模型假设抽象相干访问，固定成功率放大及正反算的常数因子统一归一化，不能据此推断实际门数或设备运行时间。
-
-## 组合计数与表示
-
-令 $m=n-k$、$K=k+\ell$、$r=m-\ell$。部分消元处理尾部 $r$ 列；列表搜索处理剩余 $K$ 个坐标，其中目标重量为 $p$，尾部重量为 $w-p$。$q,t$ 是单叶支撑区长度与重量，$V$ 是完整叶列表大小，$P$ 是指定重量分布的概率，$R$ 是每个目标的有序表示数。
-
-QSS 将 $K$ 个坐标分成四个等长区，各含 $p/4$ 个目标 1：
-
-$$
-q=K/4,\quad t=p/4,\quad V=\binom qt,\quad
-P=\frac{V^4\binom r{w-p}}{\binom nw},\quad R=1.
-$$
-
-QMMT+ 将坐标分成两个半区，各含 $p/2$ 个目标 1；两个大分量在每半区额外共有 $d/2$ 个 1，经 XOR 抵消：
-
-$$
-q=K/2,\quad t=p/4+d/2,\quad V=\binom qt,\quad
-P=\frac{\binom q{p/2}^{2}\binom r{w-p}}{\binom nw},\quad
-R=\left[\binom{p/2}{p/4}\binom{q-p/2}{d/2}\right]^2.
-$$
-
-叶列表 $V_{00},V_{10}$ 支撑前半区，$V_{01},V_{11}$ 支撑后半区；第一层合并 $(00,01)$ 和 $(10,11)$，得到大分量 $x,y$，满足 $x+y=e'$。$d=0$ 是普通 QMMT，仍不同于 QSS。上述定义采用有限组合数；大组合数的对数可用 `lgamma` 求值，不采用熵近似。
-
-## 过滤与成功比例
-
-设 $f=a+b$。第一层分别匹配 $f$ 位过滤值及其与目标综合的 XOR，第二层匹配剩余 $\ell-f$ 位。$a$ 位过滤值由内层 Grover 搜索；均匀选择的另外 $b$ 位与坐标划分共同构成外层候选，在内层搜索中保持不变。
-
-表示存活采用随机投影与均匀过滤值上的二阶矩代理；它不假设各表示独立。尾部满列秩概率按随机满行秩 $m\times n$ 矩阵集合计算：
+第一层合并 $(00,01)$ 与 $(10,11)$。设过滤位数 $f=a+b$，$a$ 位由内层 Grover 搜索，$b$ 位在外层固定。表示存活与尾部满列秩概率分别为
 
 $$
 \sigma=\frac{R}{R+2^b-1},\qquad
 \rho_\ell=\frac{\prod_{i=0}^{r-1}(1-2^{i-m})\prod_{i=0}^{\ell-1}(1-2^{i-K})}
-{\prod_{i=0}^{m-1}(1-2^{i-n})},\qquad P_{\rm eff}=P\rho_\ell\sigma.
+{\prod_{i=0}^{m-1}(1-2^{i-n})}.
 $$
 
-空乘积为 1；$b=0$ 时 $\sigma=1$。表示收益已计入 $\sigma$ 和过滤划分，不再额外乘 $R$ 加速或 $2^{b/2}$ 费用。将集合平均成功比例代入时间公式属于本模型假设，不给出逐矩阵或随机码平均运行时间上界。
-
-多解使用 `independent-solution-union-v1` 外层概率代理。令 $x=P\sigma$，则
+每综合征有 $L=2^s$ 个可接受解时，$s$ 取 `log2_solutions`，使用 `independent-solution-union-v1`：
 
 $$
-P_{\rm eff,M}=\rho_\ell\left[1-(1-x)^M\right],\qquad
-\lambda=Mx.
+P_{\rm eff}=\rho_\ell[1-(1-P\sigma)^L].
 $$
 
-所有解共享的满秩条件 $\rho_\ell$ 留在并集概率之外。概率在对数域计算，支持极小 $x$ 和很大的对数解数；$M=1$ 保留原有计算结果。$\lambda\ll1$ 时 $P_{\rm eff,M}\approx M P_{\rm eff,1}$，重复预算约缩小 $\sqrt M$，一次性 $T_0$ 不缩小；饱和上限是 $\rho_\ell$。不同解的命中独立性是额外的启发式假设，不能从表示存活的二阶矩代理推出。
+所有解共享的秩条件留在并集概率之外；单解时为 $P\rho_\ell\sigma$。$\sigma$ 是随机投影上的二阶矩代理，多解并集另作独立命中假设；不再把表示数或解数计入内层加速。
 
-内层过滤搜索及游走预算保持不变，不把全局解数再次乘入 $\varepsilon$。这适合外层命中稀疏的近似；密集多解可能还有未计入的内层收益。每个候选参数点先使用新概率计价，再优化 $\ell,p,d,u,a,b$；多解时枚举可行整数过滤划分 $b$，不沿用单解的驻点公式。`cost_breakdown` 记录 `log2_solutions`、`log2_P_eff_single`、`log2_q_single`、`log2_outer_occupancy`、`log2_q_multi` 和 `log2_P_eff_model`，用于检查占用率与饱和。
-
-## 列表和量子游走预算
-
-四张游走子列表各含 $u$ 个叶子。定义有序动态索引深度 $L(z)=\lceil\log_2(2+z)\rceil$，以及 CE 的静态有序合并预算：
+四张子列表各取 $u$ 个叶子，游走使用 $\varepsilon=(u/V)^4$、$\delta=V/[8u(V-u)]$：
 
 $$
-\mathcal M(v,j)=\begin{cases}1,&v=1,\\
-2v\lfloor\log_2v\rfloor+\lfloor v^2/2^j\rfloor,&v\ge2.
-\end{cases}
+\mathcal Q=S_{\rm list}+\varepsilon^{-1/2}(\delta^{-1/2}U+C),\qquad
+T=T_0+\frac{n}{\sqrt{P_{\rm eff}}}\bigl(G+2^{a/2}\mathcal Q\bigr).
 $$
 
-均匀标签下的平均列表大小、更新负载和静态建立代理为
+列表建立、平均更新、检查和矩阵预算按归一化向量操作定价，乘 $n$ 转为位操作；$T_0$ 为一次性位操作。完整列表 $u=V$ 使用 $\mathcal Q=S_{\rm list}+C$；直接分支单独计价。QCCF 设置 $L=M$ 并排除 $p=0$ 直接分支，其余仍为通用 SD 代理，未完整处理零综合征下的自身碰撞。
+
+| 矩阵配置 | 成本版本 | 处理 |
+|---|---|---|
+| `partial-ge-aggregate-v1`（默认） | `ka17-ce-ordered-average-v2` | 部分普通消元 |
+| `partial-m4ri-aggregate-v1` | `ka17-ce-ordered-partial-m4ri-v3` | 部分 M4RI，优化块宽并保留普通消元候选 |
+
+两种配置均假设相干主元选择、查表、更新和逆算；不估计量子内存。M4RI 块宽子问题完整优化，不意味着攻击参数全局最优。小实例 $n\le16$ 枚举模型参数域，大实例使用多起点和有预算的整数细化；停止信息保存在 `search` 元数据中。
+
+有限列表价格、整数约束和直接分支见 [quantum_costs.py](../codebased_estimator/quantum_costs.py)、[list_costs.py](../codebased_estimator/list_costs.py)、[matrix_costs.py](../codebased_estimator/matrix_costs.py)；搜索见 [quantum_search.py](../codebased_estimator/quantum_search.py)。`evaluate_parameters` 重放时须保留 `log2_solutions`、`matrix_profile`，QCCF 另设 `codeword_finding=True`。算法依据为 [Kachigar–Tillich 2017 v2 §4–5](https://arxiv.org/abs/1703.00263v2) 和 [MNRS 游走](https://arxiv.org/abs/quant-ph/0608026)，本项目有限预算仍是启发式定价。
+
+## 内置 Hamming 方案的 DOOM 映射
+
+[hamming.py](../codebased_estimator/hamming.py) 将 42 组参数展开为 119 条候选路线，按方案、参数集和恢复目标分组。下表的 $r$ 为基础循环块长，Mito 的 $d=2^\ell$ 为环坐标数。
+
+| 方案 | 密钥机制 | 消息机制 | `doom="auto"` 的目标数 |
+|---|---|---|---|
+| BIKE_MLThre、TRIKE | QCCF 非零码字代理 | QCSD | $r$ |
+| HARE、NSS-HQC、TriQ-KEM、QUBE | QCSD | `u_only` 与 `composite` QCSD | $r$ |
+| Mito | `baseline` 与 `parity` QDSD 代理 | `u_only` QDSD／`composite` QCSD | key／`u_only`：$dr$；`composite`：$r$ |
+| QCTM | 未实现 | QCSD | 自同构阶 $\ell=19$ |
+| UVW-KEM | 未实现 | 普通多元 SD | $1$ |
+
+QCSD 指定每综合征一个可接受解；BIKE/TRIKE 的 QCCF 由目标数提供码字数。除 BIKE 密钥的可逆块保证移位互异外，完整轨道均作为可用性假设，未检查具体公钥的重复综合征或稳定子。NSS-HQC 的轨道由公开方程推导，不声称 Spec 已使用该折扣。QCTM 的变换须保留非循环尾部校验行。
+
+`doom="none"` 将可用路线改为 `sd`、单目标、单解，不删除 `composite` 或 `parity`；BIKE/TRIKE 密钥此时也是普通 SD 代理。通用 Hamming 路线将块重量合并为总重量，不另计 Unbalanced、CombGap／collapse、不交支撑和密钥／消息后处理费用。量子 QCSD 始终按前述规则回退。
+
+逐实例 `references` 保留本地 Spec 路径及页码，参数快照可脱离 `local/` 目录运行。原文攻击表与本项目计算使用不同口径时，不混作同一结果；详细原文审计保留在 `local/path_audit/`。
+
+### Composite message routes：复合消息路线
+
+比较统一忽略截断、压缩残差和未知消息成本，将 $v-\operatorname{Encode}(m)$ 视为免费可得，不增加消息码维度或猜测成本。这是完整核心的比较约定，不是从真实未知消息密文到该综合征的归约。以下 $(N,K,W)$ 为 SD 长度、码维数与总重量，均使用 $q=2$。
+
+| 方案 | `u_only` 的 $(N,K,W)$ | `composite` 的 $(N,K,W)$ |
+|---|---|---|
+| HARE、TriQ-KEM | $(2r,r,2w_r)$ | $(3r,r,2w_r+w_e)$ |
+| NSS-HQC | $(2r,r,w_{r1}+w_{r2})$ | $(3r,r,w_{r1}+w_{r2}+w_e)$ |
+| Mito，$W_u=\sum_i(w_r[i]+w_t[i])$ | $(2dr,dr,W_u)$ | $((2d+1)r,dr,W_u+w_e)$ |
+| QUBE | $(3r,2r,2w_f+w_g)$ | $(4r,2r,2w_f+w_g+w_e)$ |
+
+HARE/NSS-HQC/TriQ-KEM 使用 $u=a+hb$、$v-\operatorname{Encode}(m)=sb+e$；QUBE 使用 $u=g+h_1f_1+h_2f_2$、$v-\operatorname{Encode}(m)=s_1f_1+s_2f_2+e$。各自的两个单位块给出 $2r$ 个独立校验行。
+
+Mito 保留取第零环分量的 `Pr`，仅忽略其后的截断：$u=a+A_ht$，$v-\operatorname{Encode}(m)=B_st+e$，其中 $a,t$ 各长 $dr$、$e$ 长 $r$、$B_s=[\operatorname{Cir}(s_0)\cdots\operatorname{Cir}(s_{d-1})]$。联合矩阵为
 
 $$
-D_1=u^2/2^f,\quad D_2=u^4/2^{\ell+f},\quad
-\eta_1=u/2^f,\quad\eta_2=u^2/2^\ell,\quad
-J_1=\max\{1,\lfloor D_1\rfloor\},\quad J_2=\lfloor J_1^2/2^{\ell-f}\rfloor.
+H=\begin{pmatrix}I_{dr}&A_h&0\\0&B_s&I_r\end{pmatrix},\qquad
+\operatorname{rank}(H)=(d+1)r.
 $$
 
-$J_1,J_2$ 仅用于建立成本，不替换平均负载或成功概率。叶生成、列表建立、一次更新和已缓存的有效候选标记查询，分别计为
+全部复合核心保留同时循环移位，故采用 $r$ 个目标。Mito 的 dyadic 置换会涉及未发布的其他分量，不能沿用 $dr$ 个目标。真实截断、消息消元或压缩后的轨道须另行证明。消息路线未加入 parity 专用收益。
+
+### Mito P：包含 parity 条件的密钥恢复代理
+
+真实秘密分别采自 $S^D(w_x)$、$S^D(w_y)$：逐块精确重量、同一元组内部支撑不交，两个元组独立。不能按 Spec 定义 4.1.10 的误写将其换为均匀 parity 切片。令 $E=I_d\otimes\mathbf1_r^{\mathsf T}$、$p_x=w_x\bmod2$、$p_y=w_y\bmod2$，则 $EA_h=B_hE$，其中 $B_h[i,j]=E(h)_{i\mathbin{\mathrm{xor}}j}$；给定公开 $h$，P 的随机对照综合征均匀分布于 $E(s)=p_x+B_hp_y$ 的切片。
 
 $$
-g=1+t+q\lceil\log_2(V+1)\rceil/n,\qquad
-S=4ug+2\mathcal M(u,f)+\mathcal M(J_1,\ell-f)+J_2L(J_2),
-$$
-$$
-U=g+1+2\left[L(u)+\eta_1(1+L(D_1))+\eta_1\eta_2(1+L(D_2))\right],\qquad C=1.
+H_P\binom{x}{y}=\binom{s}{p_y},\qquad
+H_P=\begin{pmatrix}I_{dr}&A_h\\0&E\end{pmatrix},\qquad
+\operatorname{rank}(H_P)=dr+d.
 $$
 
-$g$ 包含定重支撑生成及线性像；删除旧叶复用缓存，更新的倍数 2 计删除和插入。匹配输出的聚合价格包含候选判定与有效计数维护。$J_2=0$ 时顶层索引费用为零。
+$Ex=p_x$ 由上式推出，不再增加独立行。因此 $W=\sum_i(w_x[i]+w_y[i])$ 不变，`baseline` 为 $(2dr,dr,W)$，`parity` 为 $(2dr,dr-d,W)$，保留全部原坐标。增秩是精确结论，但新增行具有结构；成本将其替代为同秩随机 SD，未实现专用 P 搜索或精确条件成功率。固定总重量还可能已蕴含一个 parity 组合，故不按 $d$ 位额外扣成本。
 
-使用四轴等概率、半概率停留的 Johnson 游走；对至少一个存活见证，取标记比例下界 $\varepsilon=(u/V)^4$、谱隙 $\delta=V/[8u(V-u)]$：
+DOOM 对完整综合征同步作用：$(s,p_y)\mapsto(P_gs,D_gp_y)$，其中 $P_g$ 为循环／dyadic 坐标置换，$D_g$ 为对应的块标签置换；有 $H_P\operatorname{diag}(P_g,P_g)=\operatorname{diag}(P_g,D_g)H_P$。完整 $dr$ 轨道仍是假设，逆变换恢复原候选。
 
-$$
-\mathcal Q=S+\varepsilon^{-1/2}(\delta^{-1/2}U+C),\qquad
-T^{\rm bit}=T_0+\frac{n}{\sqrt{P_{\rm eff,M}}}\left[G+2^{a/2}\mathcal Q\right],\qquad
-T_0=(q+1)^2(t+1)+n(m+1).
-$$
+精确描述由 [MitoKeyParity](../codebased_estimator/mito_parity.py) 生成，JSON 的 `instance.cost_proxy` 保存矩阵、parity、来源及代理维数；`source_targets` 是适配器原始值，实际请求见 `instance.targets`。Spec 的采样与证明范围问题详见本地 `local/path_audit/Mito.md`；本项目未由修正定义推出搜索／决策等价、ISD 最优性或折叠攻击。
 
-$G,g,S,U,C,\mathcal Q$ 均为向量操作，$T_0$ 已为位操作。$T_0$ 计一次性组合数表及最终恢复验证；$G$ 随外层候选重复，$S$ 还随内层过滤搜索重复。$U$ 是平均负载预算，不是最坏更新费用；这些有限常数是模型价格，论文的渐近结论不证明其精确性。
+## 结果比较与重放
 
-## 矩阵处理配置
+[compare_routes](../codebased_estimator/comparison.py) 按 `(scheme, parameter_set, goal)` 分组，要求组内选项相同、实例名称唯一。经典与量子各自从可行、已计算且时间单位一致的候选中选最小时间，精确并列全部保留；单位不兼容时不选胜者。量子仅估计时间，不能据此判断其内存可行性。比较不覆盖未请求算法，也不保证启发式搜索全局最优。
 
-默认 `partial-ge-aggregate-v1` 对应成本版本 `ka17-ce-ordered-average-v2`：
-
-$$
-G=G_{\rm prep}+mr,\qquad G_{\rm prep}=mL(n)^2+n.
-$$
-
-可选 `partial-m4ri-aggregate-v1` 对应 `ka17-ce-ordered-partial-m4ri-v3`。块宽 $h$ 与过滤位数 $b$ 无关；每块实际宽度为 $h_j=\min(h,r-jh)$：
-
-$$
-E_0=mr,\qquad E_h=\sum_{j=0}^{\lceil r/h\rceil-1}(h_j^2+2^{h_j}+m-h_j)\quad(1\le h\le r),
-$$
-$$
-G_{\rm M4RI}=G_{\rm prep}+\min_{0\le h\le r}E_h.
-$$
-
-三项聚合计面板处理、表生命周期及非面板行访问更新。准备项仍随外层候选重复；末块按真实宽度计价。$h=0$ 保留普通消元，$r=0$ 时核心费用为零；平局保留更小 $h$。用单调下界 $E_h\ge2^h$ 剪枝后，块宽子问题仍完整求最小值。
-
-该配置假设尾部限定的确定性主元选择、秩失败标记、查表和行更新均相干执行，不测量或丢弃失败分支。更新前查表地址及选择历史保留到逆算；面板表由未改变的主元行局部清理，整个 oracle 再清理其余历史。抽象相干访问和统一正反算归一化是使用前提；聚合价格不是完整量子电路或精确门成本证明，面板表记录数也不是总量子内存。
-
-固定攻击参数时，配置仅改变 $G$。优化时重新搜索攻击参数，并把默认配置的胜者按新配置重放后保留较优结果。`Options.quantum_matrix_profile` 选择配置；定点重放也须保留配置，自动选择的 $h$ 位于矩阵元数据。
-
-## 参数域、边界与搜索
-
-所有搜索参数为整数。四列表分支满足 $0\le\ell\le m$、$0<p<K$、$p\le w$、$0\le w-p\le r$ 和 $4\mid p$；QSS 要求 $4\mid K,d=b=0$，QMMT+ 要求 $2\mid K,2\mid d,0\le d\le K-p$。
-
-过滤条件为 $a,b\ge0$、$f=a+b\le\ell$、$b\le\lfloor\log_2R\rfloor$。非退化游走要求 $V>1$、$1\le u\le\lfloor V/2\rfloor$、$f\ge\lceil\log_2u\rceil$、$\ell\ge\lceil2\log_2u\rceil$；后两项保证平均负载 $\eta_1,\eta_2\le1$。
-
-完整列表 $u=V$ 单独采用 $\mathcal Q=S+C$，保留重量和过滤条件，取消游走及平均负载限制。$p=0$ 或 $p=K$ 时，两个算法均使用固定候选直接分支，不受四列表整除条件限制，固定 $(d,u,a,b)=(0,1,0,0)$：
-
-$$
-P_{\rm dir}=\binom r{w-p}/\binom nw,\qquad
-T_{\rm dir}^{\rm bit}=n(m+1)+\frac{n}{\sqrt{P_{\rm dir}\rho_\ell}}(G+1+p).
-$$
-
-上式给出直接分支的单解成本；多解时同样将 $P_{\rm dir}\rho_\ell$ 替换为 $\rho_\ell[1-(1-P_{\rm dir})^M]$。直接分支仍满足 $0\le\ell\le m$、$p\le w$、$0\le w-p\le r$；QCCF 额外排除 $p=0$。最终比较可行的直接、完整列表和游走分支。
-
-$n\le16$ 时穷举上述模型参数域；较大实例采用确定性多起点、对数域细化和有预算的整数边界搜索，保留已找到的最好候选。预算耗尽或局部停止不证明搜索收敛、剩余误差或全局最优；M4RI 块宽的完整优化不改变这一限制。
-
-结果元数据记录成本版本、外层概率模型、有效对数解数、矩阵配置、搜索版本、参数和停止信息。`cost_breakdown` 中成本项通常为向量操作的 $\log_2$，`T0` 为位操作的 $\log_2$，概率和列表大小也在对数域；零输出数或零费用用 `null` 表示。`evaluate_parameters` 可独立重放参数点；重放时须传入相同的 `log2_solutions`、`matrix_profile`，QCCF 还须指定 `codeword_finding=True`。
-
-## 实现与来源
-
-生产定义见 [成本求值](../codebased_estimator/quantum_costs.py)、[矩阵预算](../codebased_estimator/matrix_costs.py)、[列表原语](../codebased_estimator/list_costs.py) 和 [参数搜索](../codebased_estimator/quantum_search.py)。
-
-算法与表示结构依据 [Kachigar–Tillich 2017 v2](https://arxiv.org/abs/1703.00263v2) §4–5，QMMT+ 的有限表示计数对应其证明中的式 (16)、(21)；游走结构见 [Magniez–Nayak–Roland–Santha](https://arxiv.org/abs/quant-ph/0608026)。经典后端及静态有序合并口径来自 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators)。本项目的有限量子预算和搜索是启发式模型，不是安全下界。
+`Report.to_dict()` 保存单路线报告；`hamming --json` 对多路线组附加 `route_comparison`。CSV 为逐算法摘要：`route_id` 标识路线，`is_best`／`is_best_route` 标记路线内／跨路线最优，`effective_doom`／`effective_targets` 区分实际计算与输入上下文，`cost_proxy` 只保存代理名称。重放输入使用 JSON 的 `instance`，并沿用 `options`；成本元数据保留版本、参数及搜索停止信息。
