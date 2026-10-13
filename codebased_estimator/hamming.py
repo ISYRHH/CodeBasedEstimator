@@ -7,9 +7,11 @@ installed packages also work without the (untracked) local/ directory.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 from .hamming_parameters import HAMMING_PARAMETERS
 from .models import AttackInstance, Problem
+from .mito_parity import MitoKeyParity
 
 
 HAMMING_SCHEMES = (
@@ -22,6 +24,7 @@ DEFAULT_HAMMING_ALGORITHMS = None
 MAPPING_REFERENCE = "local/notes/HammingISD.md: 各算法 ISD 实例（未考虑 DOOM/Unbalanced 等）"
 DOOM_REFERENCE = "local/notes/isd_parameter_mapping.md: DOOM 应作为单独维度"
 DOOM_MODES = ("auto", "none")
+COMPOSITE_MSG_SCHEMES = ("HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE")
 
 # These references support the public equations / automorphisms as well as the
 # authors' DOOM discussions. The adapters need no runtime access to local/.
@@ -45,6 +48,119 @@ _KEY_ASSUMPTION = (
     "For this preliminary key route, ordinary SD cost is used as a proxy for finding the designated nonzero low-weight secret. "
     "This is not a dedicated homogeneous codeword-finding model or a proof that any low-weight word recovers the key."
 )
+_MSG_ASSUMPTIONS = (
+    "Message-route comparison ignores ciphertext truncation and unknown-message costs: "
+    "no message guessing, message-code dimension penalty or message-elimination cost is charged.",
+    "Composite estimates use the full uncompressed core and treat v-Encode(m) as available for free. "
+    "Compression/quantization residuals are not modeled; this is a simplified cost proxy, "
+    "not a reduction from the actual unknown-message ciphertext.",
+)
+_COMPOSITE_REFERENCES = {
+    "HARE": "local/HammingSchemes/HARE/Algorithm specifications/HARE算法文档.pdf: pages 9-10, 16-20, joint core and Table 4",
+    "NSS-HQC": "local/HammingSchemes/NSS-HQC/Algorithm specifications/NSS-HQC算法文本.pdf: pages 36-40, uncompressed SD(3n,n,wr1+wr2+we) core proxy",
+    "TriQ-KEM": "local/HammingSchemes/TriQ-KEM/Algorithm specifications/Algorithm specifications.pdf: page 8, encryption; page 22, Table 12",
+    "Mito": "local/HammingSchemes/Mito/Algorithm specifications/Algorithm Specification.pdf: PDF pages 26-29, Pr and encryption; page 50, Tables 4.4-4.6 (ring-length correction applied)",
+    "QUBE": "local/HammingSchemes/QUBE/Algorithm specifications/Algorithm specifications.pdf: page 14, equation (3); page 22, Theorem 4",
+}
+
+
+def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
+    """Cost the exact augmented rank using an explicitly random SD proxy.
+
+    The public matrix is not random: its added rows are block parity checks.
+    The generic backend receives only the declared cost proxy, while the
+    source equations and approximation remain part of the exported instance.
+    """
+    p = entry["parameters"]
+    parity = MitoKeyParity(p["r"], p["d"], p["wx"], p["wy"])
+    proxy = {
+        "name": "mito-key-parity-rank-v1", "heuristic": True,
+        "source_model": "Mito P fixed-weight key with public block parities",
+        "effective_model": "random full-rank binary SD",
+        "baseline_parameters": dict(baseline.problem.parameters),
+        "effective_parameters": {"n": parity.n, "k": parity.k, "w": parity.w, "q": 2},
+        "constraints": parity.to_dict(),
+        "source_targets": baseline.targets,
+        "target_action": "(s, parity_y) -> (P_g s, D_g parity_y)",
+        "scope": "Exact augmented matrix rank; heuristic random-SD cost, not a dedicated structured P attack.",
+    }
+    return replace(
+        baseline, name=f"{entry['parameter_set']}/key_recovery/parity", route_id="parity",
+        problem=Problem("sd", proxy["effective_parameters"], log2_solutions=0),
+        route="Mito P parity rank cost proxy: (2dr,dr-d,sum(wx_i)+sum(wy_i)); "
+              "H_P=[[I,A_h],[0,E]], rhs=(s,wy mod 2); E=I_d tensor 1_r^T",
+        cost_proxy=proxy,
+        assumptions=(*baseline.assumptions,
+            "The augmented binary matrix has exact rank d*r+d. Generic ISD costs approximate it by "
+            "a random full-rank SD matrix; sparse parity-row effects on pivots and lists are not modeled.",
+            "x and y are independently sampled with their exact block weights and pairwise disjoint "
+            "supports within each tuple (S^D), not uniformly from a parity slice R[b]. "
+            "Block parities are retained in the source system; exact weights and disjointness are relaxed in the cost proxy.",
+            "E*A_h=B_h*E with (B_h)_{ij}=E(h)_{i xor j}; E*x=wx mod 2 follows from "
+            "the public syndrome and E*y=wy mod 2, so appending x parity adds no further rank.",
+            "All 2*d*r binary coordinates and total weight are preserved. There is no extra d-bit, "
+            "collapse or CombGap discount; ambient rank gain need not equal independent information on a fixed-weight domain.",
+            "DOOM transforms the entire syndrome (s,parity_y) to (P_g*s,D_g*parity_y); "
+            "dyadic shifts permute parity labels. The full d*r orbit is a proxy assumption, not guaranteed distinct targets.",
+            "This repairs the local model of P; it supplies neither a search/decision reduction "
+            "nor an optimality proof for generic ISD and excludes square/folding/lifting attacks.",
+        ),
+        references=(*baseline.references,
+            "local/HammingSchemes/Mito/Algorithm specifications/Algorithm Specification.pdf: "
+            "PDF pages 6, 25, 27 (sampler/keygen), 42-44 (P and parity); 50-51 (generic costs)",
+            "docs/model.md: Mito P parity key recovery"),
+    )
+
+
+def _composite_message(entry: dict, *, doom: str) -> AttackInstance:
+    """Full-length joint core; message masking is free by explicit convention.
+
+    Mito retains its single-component Pr map: e and v have r coordinates,
+    whereas its two ephemeral vectors each have d*r coordinates.
+    """
+    scheme, parameter_set, p = entry["scheme"], entry["parameter_set"], entry["parameters"]
+    r = p["r"]
+    if scheme == "Mito":
+        n, k = (2 * p["d"] + 1) * r, p["d"] * r
+        w = sum(p["wr"]) + sum(p["wt"]) + p["we"]
+        formula = "((2d+1)r,dr,sum(wr_i)+sum(wt_i)+we)"
+        equation = "u=a+A_h*t; v-Encode(m)=B_s*t+e, B_s=[Cir(s_0)...Cir(s_(d-1))]"
+    elif scheme == "QUBE":
+        n, k, w = 4 * r, 2 * r, 2 * p["wf"] + p["wg"] + p["we"]
+        formula = "(4r,2r,2wf+wg+we)"
+        equation = "u=g+h1*f1+h2*f2; v-Encode(m)=s1*f1+s2*f2+e"
+    else:
+        n, k = 3 * r, r
+        w = (p["wr1"] + p["wr2"] if scheme == "NSS-HQC" else 2 * p["wr"]) + p["we"]
+        formula = "(3r,r,wr1+wr2+we)" if scheme == "NSS-HQC" else "(3r,r,2wr+we)"
+        equation = "u=r1+h*r2; v-Encode(m)=s*r2+e"
+    assumptions = (*_ASSUMPTIONS, *entry.get("notes", ()), *_MSG_ASSUMPTIONS,
+                   "Identity blocks for the first ephemeral vector and e give full row rank; "
+                   "one designated acceptable solution per syndrome (log2_solutions=0). "
+                   "Parity, fixed block distributions and disjoint supports receive no extra discount.")
+    if scheme == "Mito":
+        assumptions += (
+            "Only truncation is removed: Pr still publishes one ring component, with one r-bit e. "
+            "The joint matrix has (d+1)r rows and (2d+1)r columns. Dyadic shifts do not preserve "
+            "the published second component, so only the cyclic orbit of size r is used, not d*r.",
+        )
+    targets, tags = (r, ("doom:qcsd",)) if doom == "auto" else (1, ())
+    if doom == "auto":
+        assumptions += (
+            f"QCSD joint-core proxy: simultaneous cyclic shifts of every r-bit block preserve the "
+            f"same public matrix and total weight. Full usable orbit assumed: M={r}; duplicate "
+            "syndromes and orbit correlations are not modeled. Inverse shifts recover the original candidate.",
+        )
+    else:
+        assumptions += ("Single target; no DOOM or multiple-solution speedup.",)
+    return AttackInstance(
+        name=f"{parameter_set}/msg_recovery/composite", route_id="composite",
+        scheme=scheme, parameter_set=parameter_set, goal="msg_recovery",
+        problem=Problem("sd", {"n": n, "k": k, "w": w, "q": 2}, log2_solutions=0),
+        route=f"Composite message core: {formula}; {equation}; targets={targets}",
+        targets=targets, tags=tags, assumptions=assumptions,
+        references=(*entry["references"], _COMPOSITE_REFERENCES[scheme], "docs/model.md: composite message routes"),
+    )
 
 
 def hamming_catalogue() -> list[dict]:
@@ -55,6 +171,9 @@ def hamming_catalogue() -> list[dict]:
 class HammingScheme:
     """Adapt one submission's parameter sets to the explicitly simplified routes.
 
+    Composite-capable message sets return u_only followed by composite; estimate
+    each route and use compare_routes for independent per-family selections.
+    Mito key sets return baseline followed by the explicit parity rank proxy.
     QCTM and UVW-KEM key routes remain unsupported records, rather than being
     silently omitted or assigned their message-recovery costs.
     """
@@ -197,22 +316,33 @@ class HammingScheme:
                 route += "; single-target SD baseline"
             if key and not tags and scheme in ("BIKE_MLThre", "TRIKE"):
                 assumptions = (*assumptions, _KEY_ASSUMPTION)
-            if not key and scheme in ("HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE"):
+            if not key and scheme in COMPOSITE_MSG_SCHEMES:
+                assumptions += _MSG_ASSUMPTIONS
                 assumptions += (
                     "This message route uses only the complete u equation to recover ephemeral randomness; "
                     "public decoding/decompression and candidate verification remain necessary. "
                     "The orbit count is not asserted for the truncated/compressed joint ciphertext problem.",
                 )
 
-        return [AttackInstance(
-            name=f"{parameter_set}/{goal}", scheme=scheme, parameter_set=parameter_set,
+        composite = not key and scheme in COMPOSITE_MSG_SCHEMES
+        mito_key = key and scheme == "Mito"
+        route_id = "u_only" if composite else "baseline" if mito_key else None
+        instances = [AttackInstance(
+            name=f"{parameter_set}/{goal}" + (f"/{route_id}" if route_id else ""),
+            route_id=route_id,
+            scheme=scheme, parameter_set=parameter_set,
             goal=goal, problem=problem, route=route, targets=targets, tags=tags,
             assumptions=assumptions, references=references,
         )]
+        if composite:
+            instances.append(_composite_message(entry, doom=doom))
+        if mito_key:
+            instances.append(_mito_parity_key(entry, instances[0]))
+        return instances
 
 
 def hamming_instances(*, schemes=None, parameter_sets=None, goal="both", doom="auto") -> list[AttackInstance]:
-    """Select a batch; reject misspelled or incompatible filters before costing."""
+    """Select all candidate routes; reject incompatible filters before costing."""
     selected = tuple(HAMMING_SCHEMES if schemes is None else schemes)
     if not selected:
         raise ValueError("select at least one Hamming scheme")

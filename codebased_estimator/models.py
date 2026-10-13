@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import json
 from math import isfinite
 from numbers import Real
 from typing import Any, Optional, Protocol
@@ -89,6 +90,8 @@ class AttackInstance:
     the quantum QCCF proxy uses it in the outer success probability and excludes
     the direct zero-codeword branch.
     QCSD targets remain separate from each syndrome's log2_solutions.
+    cost_proxy is JSON provenance for an explicitly chosen approximate input
+    problem, not executable constraints or permission to ignore structure.
     """
 
     name: str
@@ -102,6 +105,8 @@ class AttackInstance:
     structure: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
     references: tuple[str, ...] = ()
+    route_id: Optional[str] = None
+    cost_proxy: Optional[dict[str, Any]] = None
 
     def __post_init__(self):
         if self.goal not in ("key_recovery", "msg_recovery"):
@@ -113,12 +118,25 @@ class AttackInstance:
         for name in ("name", "route"):
             if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
                 raise ValueError(f"{name} must be a nonempty string")
-        for name in ("scheme", "parameter_set"):
+        for name in ("scheme", "parameter_set", "route_id"):
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError(f"{name} must be a nonempty string or null")
         for name in ("tags", "structure", "assumptions", "references"):
             object.__setattr__(self, name, _strings(getattr(self, name), name))
+        if self.cost_proxy is not None:
+            if not isinstance(self.cost_proxy, dict):
+                raise ValueError("cost_proxy must be a JSON object or null")
+            if "name" in self.cost_proxy and (
+                not isinstance(self.cost_proxy["name"], str) or not self.cost_proxy["name"].strip()
+            ):
+                raise ValueError("cost_proxy name must be a nonempty string")
+            try:
+                # Copy nested data and normalize it for replayable JSON output.
+                proxy = json.loads(json.dumps(self.cost_proxy, allow_nan=False))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("cost_proxy must contain finite JSON data") from exc
+            object.__setattr__(self, "cost_proxy", proxy)
         if len(set(self.tags)) != len(self.tags):
             raise ValueError("tags must contain no duplicates")
         doom_tags = [tag for tag in self.tags if tag == "doom" or tag.startswith("doom:")]

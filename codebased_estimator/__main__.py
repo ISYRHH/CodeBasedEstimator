@@ -4,25 +4,26 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 import sys
 from pathlib import Path
 
 from . import AttackInstance, DemoScheme, Options, estimate
+from .comparison import compare_routes
 from .hamming import (DEFAULT_HAMMING_ALGORITHMS, DOOM_MODES, HAMMING_SCHEMES,
                       hamming_catalogue, hamming_instances)
 from .models import QUANTUM_ALGORITHMS
 from .matrix_costs import DEFAULT_MATRIX_PROFILE, MATRIX_PROFILES
 
 
-def _csv_results(reports):
+def _csv_results(reports, comparisons=()):
     """Keep every requested classical/quantum candidate, including placeholders."""
     fields = ("scheme", "parameter_set", "goal", "n", "k", "w", "q", "status",
               "model", "algorithm", "time_log2", "memory_log2", "time_unit",
               "memory_unit", "is_best", "reason", "cost_model", "matrix_profile",
               "matrix_block_size", "problem_kind", "doom", "targets", "active_targets",
-              "effective_doom", "effective_targets")
+              "effective_doom", "effective_targets", "route_id", "instance_name", "is_best_route", "cost_proxy")
     writer = csv.DictWriter(sys.stdout, fieldnames=fields)
     writer.writeheader()
     for report in reports:
@@ -38,6 +39,13 @@ def _csv_results(reports):
                 "time_log2": row.time_log2, "memory_log2": row.memory_log2,
                 "time_unit": row.time_unit, "memory_unit": row.memory_unit,
                 "is_best": row in conclusions[row.model].best, "reason": row.reason,
+                "route_id": instance.route_id, "instance_name": instance.name,
+                "cost_proxy": (instance.cost_proxy or {}).get("name", ""),
+                "is_best_route": any(
+                    best.name == instance.name and best.estimate == row
+                    for comparison in comparisons
+                    for best in comparison.conclusions[row.model].best
+                ),
                 "cost_model": row.metadata.get("cost_model", doom.get("cost_model", "")),
                 "matrix_profile": row.metadata.get("matrix_profile", ""),
                 "matrix_block_size": row.metadata.get("matrix", {}).get("block_size", ""),
@@ -57,23 +65,76 @@ def _hamming_summary(reports):
         best = report.conclusions["classical"]
         for result in best.best or (None,):
             p = instance.problem.parameters
-            rows.append((instance.scheme, instance.parameter_set, instance.goal,
+            rows.append((instance.scheme, instance.parameter_set, instance.goal, instance.route_id or "default",
                          *(p.get(name, "") for name in ("n", "k", "w", "q")),
                          ",".join(instance.tags) or "none", instance.targets,
                          best.status, result.algorithm if result else "",
                          f"{result.time_log2:.6f}" if result else "",
                          f"{result.memory_log2:.6f}" if result else ""))
     print("Minimum time among requested classical algorithms; time=log2(bit operations), memory=log2(bits).")
-    print(f"{'parameter set':21} {'goal':12} {'n':>7} {'k':>7} {'w':>5} {'q':>5}  {'DOOM':9} {'targets':>7}  {'algorithm/status':16} {'time':>10} {'memory':>10}")
+    print(f"{'parameter set':21} {'goal':12} {'route':9} {'n':>7} {'k':>7} {'w':>5} {'q':>5}  {'DOOM':9} {'targets':>7}  {'algorithm/status':16} {'time':>10} {'memory':>10}")
     for row in rows:
-        _, parameter_set, goal, n, k, w, q, doom, targets, status, algorithm, time, memory = row
-        print(f"{parameter_set:21} {goal:12} {str(n):>7} {str(k):>7} {str(w):>5} {str(q):>5}  "
+        _, parameter_set, goal, route_id, n, k, w, q, doom, targets, status, algorithm, time, memory = row
+        print(f"{parameter_set:21} {goal:12} {route_id:9} {str(n):>7} {str(k):>7} {str(w):>5} {str(q):>5}  "
               f"{doom:9} {targets:>7}  {algorithm or status:16} {time or '--':>10} {memory or '--':>10}")
     missing = {report.instance.scheme: report.instance.route for report in reports
                if report.instance.problem.kind == "structural_key_recovery"}
     for reason in missing.values():
         print(f"Unavailable: {reason}")
+    _proxy_notes(report.instance for report in reports)
     print("Use --details for per-algorithm rows; --no-brief for assumptions and sources.")
+
+
+def _proxy_notes(instances):
+    seen = set()
+    for instance in instances:
+        proxy = instance.cost_proxy
+        if proxy and proxy.get("name") not in seen:
+            seen.add(proxy.get("name"))
+            print(f"Cost proxy: {proxy.get('name', 'unspecified')}: {proxy.get('scope', 'heuristic approximation')}")
+
+
+def _hamming_routes(instances, *, as_json=False):
+    """List mapped input problems without invoking a cost estimator."""
+    if as_json:
+        records = [{
+            "scheme": i.scheme, "parameter_set": i.parameter_set, "goal": i.goal,
+            "name": i.name, "route_id": i.route_id, "route": i.route,
+            "problem": asdict(i.problem), "tags": list(i.tags), "targets": i.targets,
+            "cost_proxy": i.cost_proxy,
+        } for i in instances]
+        print(json.dumps(records, indent=2, ensure_ascii=False, allow_nan=False))
+        return
+    print(f"{'parameter set':21} {'goal':12} {'route':9} {'problem':23} parameters")
+    for i in instances:
+        problem = next((tag.split(":", 1)[1].upper() for tag in i.tags
+                        if tag.startswith("doom:")), i.problem.kind.upper())
+        if i.problem.kind == "structural_key_recovery":
+            problem, parameters = "structural_key_recovery", "unavailable"
+        else:
+            p = {**i.problem.parameters, "targets": i.targets}
+            if i.problem.log2_solutions is not None:
+                p["log2_solutions"] = i.problem.log2_solutions
+            parameters = ", ".join(f"{name}={value}" for name, value in p.items())
+        print(f"{i.parameter_set:21} {i.goal:12} {i.route_id or 'default':9} {problem:23} {parameters}")
+    _proxy_notes(instances)
+
+
+def _route_summary(comparisons):
+    """Show the cross-route winners separately for each resource family."""
+    for comparison in comparisons:
+        if len(comparison.routes) < 2:
+            continue
+        print(f"\nRoute comparison: {comparison.parameter_set} | {comparison.goal}")
+        for family, conclusion in comparison.conclusions.items():
+            if conclusion.status == "not_requested":
+                continue
+            if not conclusion.best:
+                print(f"  Best {family} route: -- ({conclusion.status})")
+            for best in conclusion.best:
+                print(f"  Best {family} route: {best.route_id or best.name} | "
+                      f"{best.estimate.algorithm} | time=2^{best.estimate.time_log2:.6f} "
+                      f"{best.estimate.time_unit}")
 
 
 def _table(reports, *, brief=True):
@@ -86,6 +147,7 @@ def _table(reports, *, brief=True):
         if not brief:
             print(f"  {i.route}")
         print(f"  tags={list(i.tags)}; targets={i.targets}")
+        _proxy_notes((i,))
         if report.options.quantum_algorithms and report.options.quantum_matrix_profile != DEFAULT_MATRIX_PROFILE:
             print(f"  Quantum matrix profile: {report.options.quantum_matrix_profile}")
         print(f"  {'algorithm':24} {'model':10} {'status':17} {'time':>9} {'memory':>9}  units (time / memory); parameters")
@@ -145,7 +207,9 @@ def main(argv=None) -> int:
     hamming.add_argument("--goal", choices=("both", "key_recovery", "msg_recovery"), default="both")
     hamming.add_argument("--doom", choices=DOOM_MODES, default="auto",
                          help="auto: documented QCCF/QCSD orbit proxies; none: original single-target SD baseline")
-    hamming.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
+    listing = hamming.add_mutually_exclusive_group()
+    listing.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
+    listing.add_argument("--list-routes", action="store_true", help="list key/msg recovery problems and mapped parameters without running estimators")
     hamming.add_argument("--all-classical", action="store_true", help="use all upstream classical algorithms per field (already the default)")
     hamming.add_argument("--details", action="store_true", help="print per-algorithm tables; use --no-brief for assumptions and sources")
     hamming.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
@@ -183,6 +247,11 @@ def main(argv=None) -> int:
                 raise ValueError("--all-classical and --classical-algorithms are mutually exclusive")
             if args.csv and args.details:
                 raise ValueError("--csv and --details select different output formats; choose one")
+            if args.list_routes:
+                if args.csv:
+                    raise ValueError("--csv requires estimation; use --list-routes --json for the route catalogue")
+                _hamming_routes(instances, as_json=args.json)
+                return 0
             if args.list:
                 if args.csv:
                     raise ValueError("--csv requires estimation; use --list --json for the source catalogue")
@@ -228,14 +297,23 @@ def main(argv=None) -> int:
                 memory_bound_log2_bits=args.memory_bound,
                 quantum_matrix_profile=args.quantum_matrix_profile,
             )))
+        comparisons = compare_routes(reports) if args.command == "hamming" else []
         if args.json:
-            print(json.dumps([r.to_dict() for r in reports], indent=2, ensure_ascii=False, allow_nan=False))
+            by_route = {name: comparison.to_dict() for comparison in comparisons
+                        if len(comparison.routes) > 1 for name in comparison.routes}
+            records = [r.to_dict() for r in reports]
+            for record in records:
+                if record["instance"]["name"] in by_route:
+                    record["route_comparison"] = by_route[record["instance"]["name"]]
+            print(json.dumps(records, indent=2, ensure_ascii=False, allow_nan=False))
         elif args.command == "hamming" and args.csv:
-            _csv_results(reports)
+            _csv_results(reports, comparisons)
         elif args.command == "hamming" and args.brief and not args.details and all(not r.options.quantum_algorithms for r in reports):
             _hamming_summary(reports)
         else:
             _table(reports, brief=args.brief)
+        if args.command == "hamming" and not args.json and not args.csv:
+            _route_summary(comparisons)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
     except ImportError as exc:
