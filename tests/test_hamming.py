@@ -346,11 +346,11 @@ def small_binary_hamming(monkeypatch):
 
 BINARY_CLASSICAL_ALGORITHMS = {
     "BallCollision", "BJMMdw", "BJMMpdw", "BJMM", "BJMMplus", "BothMay",
-    "Dumer", "MayOzerov", "Prange", "Stern",
+    "Dumer", "MayOzerov", "Prange", "Stern", "MAGE-Stern",
 }
 
 
-def test_cli_binary_default_computes_all_upstream_algorithms_and_quantum_time_estimates(
+def test_cli_binary_default_computes_upstream_algorithms_mage_and_quantum_time_estimates(
     small_binary_hamming, capsys,
 ):
     assert main(["hamming", "--json"]) == 0

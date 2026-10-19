@@ -41,11 +41,16 @@ def fresh_ce(*, n=40, k=20, w=4, solutions=0, bound=None):
 
 @pytest.mark.parametrize("kind", ("cfp", "qccf"))
 @pytest.mark.parametrize("targets", (1, 3))
-def test_all_default_binary_algorithms_equal_fresh_ce_with_log_target_solutions(kind, targets):
+def test_default_ce_algorithms_keep_qccf_costs_and_mage_reports_unsupported(kind, targets):
     report = qccf_report(kind=kind, targets=targets)
     upstream = fresh_ce(solutions=log2(targets))
-    assert {row.algorithm for row in report.results} == set(upstream) == ALGORITHMS
-    for row in report.results:
+    assert set(upstream) == ALGORITHMS
+    assert {row.algorithm for row in report.results} == ALGORITHMS | {"MAGE-Stern"}
+    mage, = [row for row in report.results if row.algorithm == "MAGE-Stern"]
+    assert mage.status == "not_implemented" and mage.reason
+    assert mage.time_log2 is None and mage.memory_log2 is None
+    assert mage not in report.conclusions["classical"].best
+    for row in (row for row in report.results if row.algorithm in upstream):
         direct = upstream[row.algorithm]
         assert row.status == "computed"
         assert row.time_log2 == pytest.approx(direct.time_complexity(), abs=1e-10)

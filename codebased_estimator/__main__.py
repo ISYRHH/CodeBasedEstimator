@@ -210,14 +210,14 @@ def main(argv=None) -> int:
     listing = hamming.add_mutually_exclusive_group()
     listing.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
     listing.add_argument("--list-routes", action="store_true", help="list key/msg recovery problems and mapped parameters without running estimators")
-    hamming.add_argument("--all-classical", action="store_true", help="use all upstream classical algorithms per field (already the default)")
+    hamming.add_argument("--all-classical", action="store_true", help="use all default classical candidates per field (already the default)")
     hamming.add_argument("--details", action="store_true", help="print per-algorithm tables; use --no-brief for assumptions and sources")
     hamming.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
     hamming.set_defaults(targets=None, log2_solutions=None)
     for command in (demo, run, hamming):
         command.add_argument("--brief", action=argparse.BooleanOptionalAction, default=True,
                              help="reduce text notes, assumptions and sources (default: on); --no-brief shows full text; JSON/CSV unchanged")
-        command.add_argument("--classical-algorithms", nargs="*", help="classical names; default: all upstream candidates (demo uses a small selection); empty disables classical")
+        command.add_argument("--classical-algorithms", nargs="*", help="classical names; default: all candidates for the problem family (demo uses a small selection); empty disables classical")
         command.add_argument("--quantum-algorithms", nargs="*", help="quantum names; default: all registered candidates (demo uses explicit selections); empty disables quantum")
         command.add_argument("--quantum-matrix-profile", choices=MATRIX_PROFILES,
                              default=DEFAULT_MATRIX_PROFILE,

@@ -30,7 +30,7 @@
 | 机制／算法 | 处理方式 |
 |---|---|
 | QCSD：Prange、Stern、Dumer、BJMM | `ce-doom-finite-v1`，联合优化算法参数、消元块宽及实际目标数 $1\le u\le M$ |
-| QCSD：其余二元经典算法 | `sqrt_targets_approximation`，从 CE 时间减去 $\frac12\log_2M$，最低为 0；参数和内存不变 |
+| QCSD：其余 CE 二元经典算法 | `sqrt_targets_approximation`，从 CE 时间减去 $\frac12\log_2M$，最低为 0；参数和内存不变 |
 | QCCF：二元经典算法 | 优化前设置 CE 的 `nsolutions=log2(M)`，替换默认解数，不再叠加目标折扣 |
 
 显式 QCSD 模型令 $m=n-k$、$S$ 为每综合征解数、$P_0$ 为一个解命中所选重量分布的概率：
@@ -48,6 +48,51 @@ $G,B_{\rm matrix}$ 使用 CE 矩阵预算；第一份综合征已包含在基线
 $M=1$ 返回原 CE 结果，$M>1$ 也保留单目标候选。大实例采用有预算的确定性搜索，`metadata.doom.search` 记录范围与停止原因，`active_targets` 记录实际使用数量。公式、边界及定点重放见 [classical_doom.py](../codebased_estimator/classical_doom.py) 与 [doom_bjmm.py](../codebased_estimator/doom_bjmm.py)；构造依据为 [Sendrier §5](https://eprint.iacr.org/2011/367) 和 [Esser–May–Zweydinger §5.1](https://eprint.iacr.org/2021/1634)。目标相关性和有限多项式价格均属模型假设。
 
 经典 QCCF 仍是通用 SD 多解代理：零综合征下 Prange 的 $p=0$ 分支退化为零码字，自身碰撞及排除费用未专门定价，不能将结果解释为已证明的非零码字搜索成本。
+
+### MAGE-Stern
+
+`MAGE-Stern` 属于二元 SD 的默认经典候选，与其他算法分别估计并由统一报告择优。输入限于二元普通 SD 或 QCSD、每综合征一个可接受解、无额外 `structure`。显式 `log2_solutions=0` 使用单解；省略时仅在 CE 默认解数也为单解时适用。QCCF、非二元、Rank SD 和专用 regular/projective 算法尚不支持。
+
+算法分支递推来自 [Carrier–Hatey–Luzzi–Tillich，ePrint 2026/1498 §5](https://eprint.iacr.org/2026/1498)。实现只保留项目现有的计量约定：每个归一化向量操作计 $n$ 位操作、列表记录占 $n$ bits、常数内存访问费用。未实现论文的逻辑门 RAM 模型或稀疏列表内存模型。因此论文表中的时间和内存收益不是此实现的预期校准值。
+
+令 $u\le M$ 为实际使用的目标数，$m=n-k$；左右列表重量为 $p,p-\delta$，长度取 $k_L=\lfloor k/2\rfloor$、$k_R=k-k_L$，保留奇数码维数和原始输入。有限列表大小为
+
+$$
+L_L=\binom{k_L}{p},\quad L_R=\binom{k_R}{p-\delta},\quad D=L_LL_R/2^\ell.
+$$
+
+这些计数复用现有 Stern DOOM 原语。两侧列表均按完整向量存储，右表按目标展开；候选检查沿用 CE 的匹配输出聚合计价。生成矩阵方向的每层普通部分消元计 $G_i=nkb_i$ 位操作，$b_i>0$、$\sum_i b_i=k$，暂不假设额外的部分 M4RI 加速。每个叶节点对每个目标做一次完整代表向量变换，计 $nk$ 位操作，其后列表工作为
+
+$$
+C_{\rm leaf}=n\left[L_L+u(L_R+D+k)\right],\qquad
+C_{\rm tree}=\sum_{i=1}^{N}\left(\prod_{j=1}^{i}r_j\right)G_i
++\left(\prod_{j=1}^{N+1}r_j\right)C_{\rm leaf}.
+$$
+
+初次从校验矩阵输入转换为生成矩阵及目标代表，另计一次性 $T_0=(n+u)m^2$。这是一套使用 CE 基本操作价格的生成矩阵有限成本代理；它采用完整向量和普通部分消元，对论文的低层实现优化取较保守的处理，但不构成经证明的电路成本上界。内存和总时间为
+
+$$
+B=\max\{n(m+u),\ n(k+u+L_L+uL_R)\},\qquad
+T=T_0+C_{\rm tree}/P_{\rm succ}.
+$$
+
+单目标树成功率 $S=P_{\rm tree}$ 按论文式 (5.10)、(5.14)–(5.15) 的多类型分支存活递推计算，数值使用存活概率的对数，避免小成功率被相减消去。末层零窗口使用剩余重量 $w-(2p-\delta)$，修正原文式 (5.11) 与 (5.14) 的不一致。MAGE-Stern 的 `ce-mage-generator-v2` 模型使用论文的多目标公式
+
+$$
+P_{\rm succ}=1-(1-S)^u.
+$$
+
+这里明确假设不同目标的整树失败事件相互独立；只有随机误差向量独立，还不足以推出共享随机树后的无条件独立。公式无须 $uS\ll1$，该条件只用于 $P_{\rm succ}\approx uS$ 的线性近似。每次尝试计完整树成本，不提前停止，重新随机化的整树尝试按独立重复处理。不额外叠加 $\sqrt M$ 折扣，也不把同一树内叶子当作独立信息集。秩与随机矩阵处理、目标的轨道可用性及相关性仍属于模型假设。
+
+优化器采用有限预算的确定性多起点搜索，联合细化列表参数、树分块、重复数和目标批量，记录实际搜索范围与停止原因。它保留同一生成矩阵模型下的单层退化策略，只返回自身搜索结果；可行点的 `metadata.selected_strategy` 为 `single_level` 或 `multilevel`。内存界在固定点评估与搜索中都生效；时间最优不意味着内存最小。
+
+固定树的成本写成 $T(u)=n m^2+m^2u+(A+Cu)/(1-(1-S)^u)$，其中 $A>0$ 是共享树成本，$C>0$ 是每目标树成本。这一函数严格凸，故可用相邻整数差分的符号二分寻找内存允许范围内的最优批量；代码使用整数／有理数成本系数、对数判号及近并列时的高精度回退。该子问题的凸性不代表外层树参数搜索全局最优，固定点评估仍受总预算限制。
+
+MAGE-Stern 的原生结果可能比现有 CE Stern/M4RI 更慢，也可能不可行。默认运行时，它与其他经典候选一同交给 `report.conclusions` 统一比较；显式限制为仅 `MAGE-Stern` 时，只评估该算法。
+
+相对原 Stern 的收益可能同时包含生成矩阵方向和多层复用的影响，不能全部归因于分支树；`search.one_level_baseline_time_log2` 记录相同生成矩阵计价下的单层搜索基线，便于另算多层复用的效果。
+
+公式重放见 [mage_costs.py](../codebased_estimator/mage_costs.py)，树搜索见 [mage_search.py](../codebased_estimator/mage_search.py)，目标批量优化见 [mage_targets.py](../codebased_estimator/mage_targets.py)。`metadata.cost_breakdown` 保留成本、成功率分解及整树独立和完整执行假设，`metadata.search` 保留搜索范围、停止原因及单层基线。重放时从结果参数中移除 `strategy`，保留输入、`targets_used`、内存界与完整分块／重复数，交给固定点评估器；单层和多层点使用同一接口。结果仍是当前参数搜索和计价模型下的估计，不是全局最优攻击或方案安全下界。
 
 ## 量子成本
 

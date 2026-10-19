@@ -118,12 +118,15 @@ def backend_info() -> dict:
 class ClassicalModel:
     """Evaluate decoding, including binary QCSD and QCCF cost proxies.
 
+    MAGE-Stern uses a local finite branching model in the same CE bit units.
     For QCSD, Prange, Stern, Dumer and BJMM optimize explicit DOOM costs;
-    other binary algorithms use a marked square-root-of-targets approximation.
+    MAGE-Stern integrates targets into its branching cost and probability.
+    Remaining binary algorithms use a marked square-root-of-targets approximation.
     QCCF instead supplies log2(targets) as CE's number of codeword solutions.
     """
 
     name = "classical"
+    local_algorithms = ("MAGE-Stern",)
 
     @staticmethod
     def _unsupported(name: str, instance: AttackInstance, reason: str) -> Estimate:
@@ -145,7 +148,7 @@ class ClassicalModel:
 
     @classmethod
     def _known_names(cls):
-        names = set()
+        names = set(cls.local_algorithms)
         for family, base in (("SDEstimator", "SDAlgorithm"),
                              ("SDFqEstimator", "SDFqAlgorithm"),
                              ("RankSDEstimator", "RankSDAlgorithm")):
@@ -182,12 +185,137 @@ class ClassicalModel:
                            log2_solutions=math.log2(instance.targets))
         return instance.problem
 
+    @staticmethod
+    def _mage_applicability(instance: AttackInstance) -> tuple[Problem | None, str]:
+        """Keep unsupported structures and solution counts out of the new model."""
+        problem = instance.problem
+        if problem.kind not in ("sd", "qcsd"):
+            return None, "MAGE-Stern currently supports only binary SD and QCSD."
+        try:
+            problem = Problem("sd", dict(problem.parameters), problem.log2_solutions)
+        except ValueError as exc:
+            return None, f"MAGE-Stern requires valid SD parameters: {exc}."
+        if problem.parameters["q"] != 2:
+            return None, "MAGE-Stern currently requires binary parameters (q=2)."
+        if problem.log2_solutions not in (None, 0):
+            return None, "MAGE-Stern currently supports one acceptable solution per syndrome (log2_solutions=0)."
+        if instance.structure:
+            return None, "MAGE-Stern has no reduction for additional structure: " + ", ".join(instance.structure)
+        if instance.tags not in ((), ("doom:qcsd",)):
+            return None, "MAGE-Stern supports only untagged SD or the doom:qcsd target model."
+        if not instance.tags and instance.targets != 1:
+            return None, "MAGE-Stern requires doom:qcsd for multiple syndrome targets."
+        return problem, ""
+
+    def _estimate_mage(self, instance: AttackInstance, options: Options) -> Estimate:
+        name = "MAGE-Stern"
+        problem, reason = self._mage_applicability(instance)
+        if reason:
+            return self._unsupported(name, instance, reason)
+        parameters = problem.parameters
+        effective_solutions = problem.log2_solutions
+        if effective_solutions is None:
+            # Read CE's problem convention without running another algorithm.
+            sd_problem = importlib.import_module("cryptographic_estimators.SDEstimator.sd_problem")
+            effective_solutions = sd_problem.SDProblem(
+                parameters["n"], parameters["k"], parameters["w"],
+            ).nsolutions
+        if effective_solutions != 0:
+            return self._unsupported(
+                name, instance,
+                "MAGE-Stern currently supports one solution per syndrome; the CE default "
+                "has multiple solutions for this instance. Set log2_solutions=0 explicitly "
+                "to compare under a single-solution assumption.",
+            )
+        from .mage_search import optimize
+        from .mage_costs import COST_MODEL, TARGET_SUCCESS_MODEL
+
+        cost = optimize(parameters["n"], parameters["k"], parameters["w"],
+                        algorithm=name, targets=instance.targets,
+                        memory_bound_log2_bits=options.memory_bound_log2_bits)
+        details = {
+            "estimator": "local MAGE-Stern",
+            "cost_model": COST_MODEL,
+            "target_success_model": TARGET_SUCCESS_MODEL,
+            "bit_complexities": 1,
+            "complexity_type": 0,
+            "memory_access": 0,
+            "memory_bound_log2_bits": options.memory_bound_log2_bits,
+            "tags": list(instance.tags),
+            "targets": instance.targets,
+            "effective_log2_solutions": 0,
+            "solution_count_policy": (
+                "CE default equals one solution per syndrome"
+                if problem.log2_solutions is None else "explicit log2 count"
+            ),
+            "heuristic": True,
+            "mage_cost_convention": {
+                "memory_access": "constant cost",
+                "vector_operation_bit_cost": parameters["n"],
+                "list_record_bits": parameters["n"],
+                "partial_elimination": "n*k*b bit operations per generator-matrix block of b pivots",
+                "target_transform": "n*k bit operations per target per leaf",
+                "target_storage": "full n-bit vectors and a target-expanded right list",
+                "input_conversion": "parity-check to generator conversion charged once",
+            },
+        }
+        bound = options.memory_bound_log2_bits
+        time = cost.time_log2 if cost else math.inf
+        memory = cost.memory_log2 if cost else math.inf
+        feasible = (math.isfinite(time) and math.isfinite(memory)
+                    and (bound is None or memory <= bound))
+        if cost is not None:
+            details["search"] = cost.search
+        references = ("https://eprint.iacr.org/2026/1498 (MAGE-Stern, Sections 5-6)",)
+        strategy = "multilevel" if cost and len(cost.parameters.get("blocks", ())) > 1 else "single_level"
+        details["selected_strategy"] = strategy if feasible else None
+        if cost is not None:
+            details["cost_breakdown"] = cost.details
+        if instance.tags == ("doom:qcsd",):
+            details["doom"] = {
+                "model": "mage_stern_branching",
+                "cost_model": COST_MODEL,
+                "available_targets": instance.targets,
+                "active_targets": cost.parameters.get("targets_used", instance.targets) if cost else None,
+                "postprocessing_speedup_applied": False,
+            }
+        assumptions = (
+            "Binary random-code SD with one acceptable solution per syndrome.",
+            "Whole-tree failures for distinct targets are assumed mutually independent; "
+            "success is 1-(1-S)^u for single-target tree success S. Independent errors alone "
+            "do not establish this assumption for a shared randomized tree.",
+            "Complete tree executions are charged without early stopping, with independent "
+            "randomized retries until success.",
+            "CE-compatible constant-cost memory access, n-bit vector operations and list storage; "
+            "finite MAGE-Stern branching probabilities and partial elimination are modeled locally.",
+            "Generator partial elimination costs n*k*b bit operations for b pivots; each leaf "
+            "transforms each target for n*k bit operations. Both full-vector lists, the target-expanded right list, "
+            "and parity-check-to-generator conversion storage are charged.",
+            "The bounded parameter search returns the best evaluated point, not a proof of global optimality.",
+        )
+        if instance.tags:
+            assumptions += (
+                "QCSD syndrome targets are usable under the model's random-error branching assumptions; "
+                "correlations between cyclic shifts are not modeled and no separate sqrt(targets) discount is applied.",
+            )
+        return Estimate(
+            algorithm=name, model=self.name,
+            status="computed" if feasible else "infeasible",
+            time_log2=float(time) if math.isfinite(time) else None,
+            memory_log2=float(memory) if math.isfinite(memory) else None,
+            parameters=_json_value({**cost.parameters, "strategy": strategy}) if cost else {},
+            reason="" if feasible else "No finite MAGE-Stern estimate satisfies the parameters and memory bound.",
+            assumptions=assumptions,
+            references=references,
+            metadata=_json_value(details),
+        )
+
     def estimate(self, instance: AttackInstance, options: Options) -> list[Estimate]:
         requested = options.classical_algorithms
         if requested == ():
             return []
         resolved = self._resolve(self._backend_problem(instance))
-        candidates = resolved[-1] if resolved is not None else self._known_names()
+        candidates = set(resolved[-1]) | set(self.local_algorithms) if resolved is not None else self._known_names()
         if requested is not None:
             unknown = set(requested).difference(candidates)
             if unknown:
@@ -197,13 +325,21 @@ class ClassicalModel:
                 )
             names = list(dict.fromkeys(requested))
         else:
-            names = list(candidates) if resolved is not None else ["classical"]
+            names = list(resolved[-1]) if resolved is not None else []
+            if ((resolved is not None and resolved[0] == "SDEstimator")
+                    or (instance.problem.kind == "qcsd"
+                        and instance.problem.parameters.get("q", 2) == 2)):
+                names.extend(self.local_algorithms)
+            if not names:
+                names = ["classical"]
         return [self.estimate_algorithm(name, instance, options) for name in names]
 
     def estimate_algorithm(
         self, name: str, instance: AttackInstance, options: Options,
     ) -> Estimate:
         """Receive the full tagged instance before applicability checks and optimization."""
+        if name == "MAGE-Stern":
+            return self._estimate_mage(instance, options)
         problem = self._backend_problem(instance)
         resolved = self._resolve(problem)
         if resolved is None:

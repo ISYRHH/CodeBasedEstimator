@@ -39,7 +39,7 @@ HARE/NSS-HQC/TriQ-KEM/Mito/QUBE 的消息恢复同时比较 `u_only` 与 `compos
 
 `hamming` 默认 `--doom auto`；`--doom none` 只关闭多目标，仍保留所有候选路径。量子 QCSD 自动回退至单目标估计。路线公式和目标数见[方案映射](docs/model.md#内置-hamming-方案的-doom-映射)。
 
-`estimate`／`hamming` 默认运行后端默认经典候选和全部注册量子候选，其中 QPrange 仅返回未实现记录。算法选项后不列名称可关闭该类别。`--memory-bound` 设置经典内存上限的 log₂ 值；量子内存未估计。量子矩阵配置可用 `--quantum-matrix-profile partial-m4ri-aggregate-v1` 切换。
+`estimate`／`hamming` 默认运行各问题族的经典候选和全部注册量子候选；二元 SD 的经典候选包含本地 [MAGE-Stern 模型](docs/model.md#mage-stern)，QPrange 仅返回未实现记录。算法选项后不列名称可关闭该类别。`--memory-bound` 设置经典内存上限的 log₂ 值；量子内存未估计。量子矩阵配置可用 `--quantum-matrix-profile partial-m4ri-aggregate-v1` 切换。
 
 ## 输出
 

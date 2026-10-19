@@ -160,10 +160,10 @@ class AttackInstance:
 
 @dataclass(frozen=True)
 class Options:
-    """Default to all upstream classical and registered quantum candidates.
+    """Default to each problem family's classical and registered quantum candidates.
 
-    None selects each problem family's upstream classical defaults; an empty
-    tuple explicitly disables either family.
+    None includes upstream defaults and local classical candidates for that
+    family. An empty tuple disables either family.
     """
 
     classical_algorithms: Optional[tuple[str, ...]] = None
