@@ -118,12 +118,16 @@ def backend_info() -> dict:
 class ClassicalModel:
     """Evaluate decoding, including binary QCSD and QCCF cost proxies.
 
+    MAGE-Stern uses a local finite branching model in the same CE bit units.
     For QCSD, Prange, Stern, Dumer and BJMM optimize explicit DOOM costs;
-    other binary algorithms use a marked square-root-of-targets approximation.
-    QCCF instead supplies log2(targets) as CE's number of codeword solutions.
+    MAGE-Stern integrates targets into its branching cost and probability.
+    Remaining binary algorithms use a marked square-root-of-targets approximation.
+    QCCF supplies log2(targets) as CE's solution count; MAGE instead uses a
+    one-syndrome independent-codeword proxy with the same single-target costs.
     """
 
     name = "classical"
+    local_algorithms = ("MAGE-Stern",)
 
     @staticmethod
     def _unsupported(name: str, instance: AttackInstance, reason: str) -> Estimate:
@@ -145,7 +149,7 @@ class ClassicalModel:
 
     @classmethod
     def _known_names(cls):
-        names = set()
+        names = set(cls.local_algorithms)
         for family, base in (("SDEstimator", "SDAlgorithm"),
                              ("SDFqEstimator", "SDFqAlgorithm"),
                              ("RankSDEstimator", "RankSDAlgorithm")):
@@ -182,12 +186,185 @@ class ClassicalModel:
                            log2_solutions=math.log2(instance.targets))
         return instance.problem
 
+    @staticmethod
+    def _mage_applicability(instance: AttackInstance) -> tuple[Problem | None, str]:
+        """Keep unsupported structures and solution counts out of the new model."""
+        problem = instance.problem
+        codeword_finding = problem.kind in ("cfp", "qccf")
+        if problem.kind not in ("sd", "qcsd", "cfp", "qccf"):
+            return None, "MAGE-Stern supports binary SD, QCSD and explicitly tagged QCCF proxies."
+        if codeword_finding and instance.tags != ("doom:qccf",):
+            return None, "MAGE-Stern codeword finding requires exactly the doom:qccf tag."
+        try:
+            problem = Problem("sd", dict(problem.parameters), problem.log2_solutions)
+        except ValueError as exc:
+            return None, f"MAGE-Stern requires valid SD parameters: {exc}."
+        if problem.parameters["q"] != 2:
+            return None, "MAGE-Stern currently requires binary parameters (q=2)."
+        if problem.log2_solutions not in (None, 0):
+            return None, "MAGE-Stern currently supports one acceptable solution per syndrome (log2_solutions=0)."
+        if instance.structure:
+            return None, "MAGE-Stern has no reduction for additional structure: " + ", ".join(instance.structure)
+        if not codeword_finding and instance.tags not in ((), ("doom:qcsd",)):
+            return None, "MAGE-Stern supports only untagged SD or the doom:qcsd target model."
+        if not instance.tags and instance.targets != 1:
+            return None, "MAGE-Stern requires doom:qcsd for multiple syndrome targets."
+        return problem, ""
+
+    def _estimate_mage(self, instance: AttackInstance, options: Options) -> Estimate:
+        name = "MAGE-Stern"
+        problem, reason = self._mage_applicability(instance)
+        if reason:
+            return self._unsupported(name, instance, reason)
+        parameters = problem.parameters
+        codeword_finding = instance.tags == ("doom:qccf",)
+        effective_solutions = (math.log2(instance.targets) if codeword_finding
+                               else problem.log2_solutions)
+        if not codeword_finding and effective_solutions is None:
+            # Read CE's problem convention without running another algorithm.
+            sd_problem = importlib.import_module("cryptographic_estimators.SDEstimator.sd_problem")
+            effective_solutions = sd_problem.SDProblem(
+                parameters["n"], parameters["k"], parameters["w"],
+            ).nsolutions
+        if not codeword_finding and effective_solutions != 0:
+            return self._unsupported(
+                name, instance,
+                "MAGE-Stern currently supports one solution per syndrome; the CE default "
+                "has multiple solutions for this instance. Set log2_solutions=0 explicitly "
+                "to compare under a single-solution assumption.",
+            )
+        from .mage_search import optimize
+        from .mage_costs import (COST_MODEL, TARGET_SUCCESS_MODEL,
+                                 QCCF_COST_MODEL, CODEWORD_SUCCESS_MODEL)
+
+        search_options = {"algorithm": name,
+                          "targets": 1 if codeword_finding else instance.targets,
+                          "memory_bound_log2_bits": options.memory_bound_log2_bits}
+        if codeword_finding:
+            search_options["codewords"] = instance.targets
+        cost = optimize(parameters["n"], parameters["k"], parameters["w"],
+                        **search_options)
+        details = {
+            "estimator": "local MAGE-Stern",
+            "cost_model": QCCF_COST_MODEL if codeword_finding else COST_MODEL,
+            "target_success_model": CODEWORD_SUCCESS_MODEL if codeword_finding else TARGET_SUCCESS_MODEL,
+            "bit_complexities": 1,
+            "complexity_type": 0,
+            "memory_access": 0,
+            "memory_bound_log2_bits": options.memory_bound_log2_bits,
+            "tags": list(instance.tags),
+            "targets": instance.targets,
+            "effective_log2_solutions": effective_solutions,
+            "solution_count_policy": (
+                "QCCF targets count all usable nonzero codewords of one zero syndrome"
+                if codeword_finding else "CE default equals one solution per syndrome"
+                if problem.log2_solutions is None else "explicit log2 count"
+            ),
+            "heuristic": True,
+            "mage_cost_convention": {
+                "memory_access": "constant cost",
+                "vector_operation_bit_cost": parameters["n"],
+                "list_record_bits": parameters["n"],
+                "partial_elimination": "n*k*b bit operations per generator-matrix block of b pivots",
+                "target_transform": (
+                    "one n*k zero-representative transform per leaf retained as CE proxy overhead"
+                    if codeword_finding else "n*k bit operations per target per leaf"
+                ),
+                "target_storage": (
+                    "one n-bit representative and two unexpanded full-vector lists"
+                    if codeword_finding else "full n-bit vectors and a target-expanded right list"
+                ),
+                "input_conversion": "parity-check to generator conversion charged once",
+            },
+        }
+        bound = options.memory_bound_log2_bits
+        time = cost.time_log2 if cost else math.inf
+        memory = cost.memory_log2 if cost else math.inf
+        feasible = (math.isfinite(time) and math.isfinite(memory)
+                    and (bound is None or memory <= bound))
+        if cost is not None:
+            details["search"] = cost.search
+        references = ("https://eprint.iacr.org/2026/1498 (MAGE-Stern, Sections 5-6)",)
+        strategy = "multilevel" if cost and len(cost.parameters.get("blocks", ())) > 1 else "single_level"
+        details["selected_strategy"] = strategy if feasible else None
+        if cost is not None:
+            details["cost_breakdown"] = cost.details
+        if instance.tags == ("doom:qcsd",):
+            details["doom"] = {
+                "model": "mage_stern_branching",
+                "cost_model": COST_MODEL,
+                "available_targets": instance.targets,
+                "active_targets": cost.parameters.get("targets_used", instance.targets) if cost else None,
+                "postprocessing_speedup_applied": False,
+            }
+        if codeword_finding:
+            details.update({
+                "codeword_finding": True,
+                "target_semantics": "nonzero_codewords",
+                "effective_syndrome_targets": 1,
+                "available_codewords": instance.targets,
+                "codeword_sampling_model": "uniform_weight_support_proxy",
+                "zero_syndrome_cost_model": "single_syndrome_ce_proxy_including_representative_overhead",
+                "doom": {
+                    "model": "mage_stern_codeword_proxy",
+                    "cost_model": QCCF_COST_MODEL,
+                    "available_targets": instance.targets,
+                    "available_codewords": instance.targets,
+                    "active_codewords": instance.targets if feasible else None,
+                    "effective_syndrome_targets": 1,
+                    "effective_log2_solutions": effective_solutions,
+                    "postprocessing_speedup_applied": False,
+                },
+            })
+        probability_assumptions = (
+            "QCCF uses a uniform-weight-support codeword proxy for one zero syndrome. "
+            "The single-word recursion is not an exact rank-conditioned codeword distribution.",
+            "Whole-tree failures for the supplied nonzero codewords are assumed mutually independent; "
+            "success is 1-(1-S_cw)^M. Codeword and QC-orbit correlations are not derived from M.",
+            "All M codewords enter only the outer probability before tree optimization. "
+            "Single-syndrome CE costs are retained, including representative overhead that "
+            "a zero-syndrome implementation could omit; no M-fold lists or target discount are applied.",
+            "p>=1 and 2*p-delta>=1 exclude the zero information vector and, with a full-rank "
+            "information set, the zero codeword. The two lists use disjoint information coordinates.",
+        ) if codeword_finding else (
+            "Binary random-code SD with one acceptable solution per syndrome.",
+            "Whole-tree failures for distinct targets are assumed mutually independent; "
+            "success is 1-(1-S)^u for single-target tree success S. Independent errors alone "
+            "do not establish this assumption for a shared randomized tree.",
+        )
+        assumptions = probability_assumptions + (
+            "Complete tree executions are charged without early stopping, with independent "
+            "randomized retries until success.",
+            "CE-compatible constant-cost memory access, n-bit vector operations and list storage; "
+            "finite MAGE-Stern branching probabilities and partial elimination are modeled locally.",
+            "Generator partial elimination costs n*k*b bit operations for b pivots; the CE baseline "
+            "charges n*k per represented syndrome per leaf. Full-vector lists, representative storage "
+            "and parity-check-to-generator conversion storage are charged.",
+            "The bounded parameter search returns the best evaluated point, not a proof of global optimality.",
+        )
+        if instance.tags == ("doom:qcsd",):
+            assumptions += (
+                "QCSD syndrome targets are usable under the model's random-error branching assumptions; "
+                "correlations between cyclic shifts are not modeled and no separate sqrt(targets) discount is applied.",
+            )
+        return Estimate(
+            algorithm=name, model=self.name,
+            status="computed" if feasible else "infeasible",
+            time_log2=float(time) if math.isfinite(time) else None,
+            memory_log2=float(memory) if math.isfinite(memory) else None,
+            parameters=_json_value({**cost.parameters, "strategy": strategy}) if cost else {},
+            reason="" if feasible else "No finite MAGE-Stern estimate satisfies the parameters and memory bound.",
+            assumptions=assumptions,
+            references=references,
+            metadata=_json_value(details),
+        )
+
     def estimate(self, instance: AttackInstance, options: Options) -> list[Estimate]:
         requested = options.classical_algorithms
         if requested == ():
             return []
         resolved = self._resolve(self._backend_problem(instance))
-        candidates = resolved[-1] if resolved is not None else self._known_names()
+        candidates = set(resolved[-1]) | set(self.local_algorithms) if resolved is not None else self._known_names()
         if requested is not None:
             unknown = set(requested).difference(candidates)
             if unknown:
@@ -197,13 +374,21 @@ class ClassicalModel:
                 )
             names = list(dict.fromkeys(requested))
         else:
-            names = list(candidates) if resolved is not None else ["classical"]
+            names = list(resolved[-1]) if resolved is not None else []
+            if ((resolved is not None and resolved[0] == "SDEstimator")
+                    or (instance.problem.kind == "qcsd"
+                        and instance.problem.parameters.get("q", 2) == 2)):
+                names.extend(self.local_algorithms)
+            if not names:
+                names = ["classical"]
         return [self.estimate_algorithm(name, instance, options) for name in names]
 
     def estimate_algorithm(
         self, name: str, instance: AttackInstance, options: Options,
     ) -> Estimate:
         """Receive the full tagged instance before applicability checks and optimization."""
+        if name == "MAGE-Stern":
+            return self._estimate_mage(instance, options)
         problem = self._backend_problem(instance)
         resolved = self._resolve(problem)
         if resolved is None:

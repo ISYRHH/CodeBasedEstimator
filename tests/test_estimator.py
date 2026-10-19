@@ -174,7 +174,7 @@ def test_estimate_requires_at_least_one_enabled_family():
                  options=Options(classical_algorithms=(), quantum_algorithms=()))
 
 
-def test_defaults_include_all_upstream_classical_and_registered_quantum_algorithms(quantum_cost):
+def test_defaults_include_upstream_classical_mage_and_registered_quantum_algorithms(quantum_cost):
     from codebased_estimator.quantum import QuantumModel
 
     report = estimate(instance(Problem("sd", {"n": 40, "k": 20, "w": 4}, 0)))
@@ -184,11 +184,18 @@ def test_defaults_include_all_upstream_classical_and_registered_quantum_algorith
     quantum = [row for row in report.results if row.model == "quantum"]
     assert {row.algorithm for row in classical} == {
         type(algorithm).__name__ for algorithm in direct.algorithms()
-    }
+    } | {"MAGE-Stern"}
     assert {"Prange", "Stern", "BJMM", "BJMMplus", "BothMay", "MayOzerov"} <= {
         row.algorithm for row in classical
     }
     assert all(row.status == "computed" for row in classical)
+    upstream = {type(algorithm).__name__: algorithm for algorithm in direct.algorithms()}
+    for row in classical:
+        if row.algorithm in upstream:
+            algorithm = upstream[row.algorithm]
+            assert row.time_log2 == pytest.approx(algorithm.time_complexity(), abs=1e-10)
+            assert row.memory_log2 == pytest.approx(algorithm.memory_complexity(), abs=1e-10)
+            assert row.parameters == algorithm.get_optimal_parameters_dict()
     assert tuple(row.algorithm for row in quantum) == QuantumModel.algorithms
     assert {row.algorithm for row in quantum} == {"QPrange", "QSS", "QMMT+"}
     assert report.options.classical_algorithms is None

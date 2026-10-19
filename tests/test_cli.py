@@ -30,7 +30,7 @@ def quantum_cost(monkeypatch):
     return cost
 
 
-def test_cli_defaults_to_all_upstream_classical_and_registered_quantum_algorithms(attack_file, capsys):
+def test_cli_defaults_include_mage_and_report_its_unsupported_multisolution_scope(attack_file, capsys):
     assert main(["estimate", str(attack_file), "--json"]) == 0
     record, = json.loads(capsys.readouterr().out)
     classical = [row for row in record["results"] if row["model"] == "classical"]
@@ -38,8 +38,12 @@ def test_cli_defaults_to_all_upstream_classical_and_registered_quantum_algorithm
     upstream = SDEstimator(n=40, k=20, w=4, nsolutions=2)
     assert {row["algorithm"] for row in classical} == {
         type(algorithm).__name__ for algorithm in upstream.algorithms()
-    }
-    assert all(row["status"] == "computed" for row in classical)
+    } | {"MAGE-Stern"}
+    assert all(row["status"] == "computed" for row in classical if row["algorithm"] != "MAGE-Stern")
+    mage, = [row for row in classical if row["algorithm"] == "MAGE-Stern"]
+    assert mage["status"] == "not_implemented" and mage["reason"]
+    assert mage["time_log2"] is None and mage["memory_log2"] is None
+    assert mage not in record["conclusions"]["classical"]["best"]
     assert tuple(row["algorithm"] for row in quantum) == QuantumModel.algorithms
     assert quantum[0]["status"] == "not_implemented"
     assert all(row["status"] == "computed" and row["time_log2"] is not None

@@ -41,11 +41,19 @@ def fresh_ce(*, n=40, k=20, w=4, solutions=0, bound=None):
 
 @pytest.mark.parametrize("kind", ("cfp", "qccf"))
 @pytest.mark.parametrize("targets", (1, 3))
-def test_all_default_binary_algorithms_equal_fresh_ce_with_log_target_solutions(kind, targets):
+def test_default_ce_algorithms_keep_qccf_costs_and_mage_uses_codeword_proxy(kind, targets):
     report = qccf_report(kind=kind, targets=targets)
     upstream = fresh_ce(solutions=log2(targets))
-    assert {row.algorithm for row in report.results} == set(upstream) == ALGORITHMS
-    for row in report.results:
+    assert set(upstream) == ALGORITHMS
+    assert {row.algorithm for row in report.results} == ALGORITHMS | {"MAGE-Stern"}
+    mage, = [row for row in report.results if row.algorithm == "MAGE-Stern"]
+    assert mage.status == "computed"
+    assert mage.time_log2 is not None and mage.memory_log2 is not None
+    assert mage.metadata["doom"]["model"] == "mage_stern_codeword_proxy"
+    assert mage.metadata["effective_log2_solutions"] == log2(targets)
+    assert mage.metadata["effective_syndrome_targets"] == 1
+    assert mage.parameters["codewords"] == targets
+    for row in (row for row in report.results if row.algorithm in upstream):
         direct = upstream[row.algorithm]
         assert row.status == "computed"
         assert row.time_log2 == pytest.approx(direct.time_complexity(), abs=1e-10)
@@ -119,7 +127,7 @@ def test_qccf_passes_the_memory_bound_to_ce_before_optimization():
     {"structure": ("block weights",)},
 ])
 def test_qccf_does_not_discard_unmodeled_context(options):
-    rows = qccf_report(targets=8, algorithms=("Prange", "Stern"), **options).results
+    rows = qccf_report(targets=8, algorithms=("Prange", "Stern", "MAGE-Stern"), **options).results
     assert all(row.status == "not_implemented" for row in rows)
     assert all(row.time_log2 is None and row.memory_log2 is None and row.reason for row in rows)
 
