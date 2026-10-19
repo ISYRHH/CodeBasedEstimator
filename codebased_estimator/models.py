@@ -85,10 +85,13 @@ class AttackInstance:
     tags are passed to algorithms BEFORE parameter optimization. DOOM tags:
       doom:qccf -- targets counts usable nonzero codeword/orbit candidates;
       doom:qcsd -- targets counts usable syndrome targets under one matrix.
-    Neither tag implies independence or a universal speedup. The built-in
-    classical QCCF proxy maps its total usable codeword count to CE nsolutions;
-    the quantum QCCF proxy uses it in the outer success probability and excludes
-    the direct zero-codeword branch.
+    Neither tag implies independence or a universal speedup. CE-backed
+    classical QCCF algorithms map the total usable codeword count to CE
+    nsolutions. Local MAGE-Stern instead uses it in the whole-tree solution
+    union, retaining one syndrome's full inner cost without target batching
+    or a discount for the known zero representative. The quantum QCCF proxy
+    uses it in the outer success probability and excludes the direct
+    zero-codeword branch.
     QCSD targets remain separate from each syndrome's log2_solutions.
     cost_proxy is JSON provenance for an explicitly chosen approximate input
     problem, not executable constraints or permission to ignore structure.

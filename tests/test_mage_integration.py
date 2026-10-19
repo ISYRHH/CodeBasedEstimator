@@ -49,8 +49,9 @@ def native_search(monkeypatch):
 @pytest.mark.parametrize("instance", [
     attack(problem=Problem("sd", {"n": 40, "k": 20, "w": 4, "q": 3}, 0)),
     attack(problem=Problem("sd", {"n": 40, "k": 20, "w": 4}, 1)),
+    attack(problem=Problem("qcsd", {"n": 40, "k": 20, "w": 4}, 1),
+           tags=("doom:qcsd",), targets=8),
     attack(problem=Problem("rank_sd", {"q": 2, "m": 8, "n": 8, "k": 4, "r": 2})),
-    attack(problem=Problem("qccf", {"n": 40, "k": 20, "w": 4}), tags=("doom:qccf",)),
     attack(problem=Problem("other", {})),
     attack(problem=Problem("qcsd", {"n": 40, "k": 50, "w": 4})),
     attack(structure=("regular",)),

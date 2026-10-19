@@ -86,9 +86,10 @@ def _tree_seeds(n, k, w):
 
 
 class _Search:
-    def __init__(self, n, k, w, targets, bound):
+    def __init__(self, n, k, w, targets, bound, codewords=None):
         self.n, self.k, self.w = n, k, w
         self.targets, self.bound = targets, bound
+        self.codewords = codewords
         self.cache, self.batch_caps = {}, {}
         self.best = None
         self.cache_hits = 0
@@ -109,6 +110,7 @@ class _Search:
             self.n, self.k, self.w, ell=ell, p=p, delta=delta,
             blocks=blocks, repetitions=repetitions, targets=targets,
             memory_bound_log2_bits=self.bound,
+            codewords=self.codewords,
         )
         self.cache[key] = result
         if result is not None and (self.best is None
@@ -156,6 +158,10 @@ class _Search:
         result = self.raw(ell, p, delta, blocks, repetitions, maximum)
         if result is None:
             return None
+        if self.codewords is not None:
+            # One zero syndrome is processed.  All acceptable codewords are
+            # free alternatives in that same search, not a syndrome batch.
+            return result
         details = result.details
         probability = details["log2_single_target_success_probability"]
         # For fixed tree parameters the exact independent-union objective is
@@ -281,8 +287,8 @@ class _Search:
 
 
 @lru_cache(maxsize=128)
-def _optimize(n, k, w, targets, memory_bound_log2_bits):
-    search = _Search(n, k, w, targets, memory_bound_log2_bits)
+def _optimize(n, k, w, targets, memory_bound_log2_bits, codewords=None):
+    search = _Search(n, k, w, targets, memory_bound_log2_bits, codewords)
     limit = min(INITIAL_P_LIMIT, k//2, w)
     initial_ps = sorted(set(range(1, min(8, limit)+1)) | {value for value in (10, 12) if value <= limit})
     one_level = []
@@ -366,26 +372,37 @@ def _optimize(n, k, w, targets, memory_bound_log2_bits):
         "scaled_paper_seed_is_only_a_start": True,
         "existing_ce_stern_is_a_separate_candidate": True,
     }
+    if codewords is not None:
+        statistics.update({
+            "codeword_count": codewords,
+            "target_batch_search": "not applicable: one zero syndrome, all codewords enter the outer probability",
+        })
     return replace(replay, search=statistics)
 
 
 def optimize(n, k, w, *, algorithm="MAGE-Stern", targets=1,
-             memory_bound_log2_bits=None) -> MageCost | None:
-    """Return a replayable heuristic tree for binary, single-solution decoding.
+             memory_bound_log2_bits=None, codewords=None) -> MageCost | None:
+    """Return a replayable heuristic tree for binary decoding or QCCF proxies.
 
     ``targets`` counts available syndromes, each with one accepted solution.
     Invalid or memory-infeasible instances return ``None``.  The public
     classical adapter handles unsupported problem families.  CE's original
     Stern algorithm competes separately in the normal report comparison when
     requested.  Cached results are copied before being returned.
+
+    Positive ``codewords`` selects the one-syndrome QCCF proxy.  It requires
+    ``targets=1`` and enters the objective before tree parameter optimization;
+    its codeword count is never optimized as a materialized syndrome batch.
     """
     if algorithm != "MAGE-Stern":
         raise ValueError(f"Unknown MAGE search algorithm: {algorithm}")
     if (any(type(value) is not int for value in (n, k, w, targets))
             or not (0 < k < n and 1 <= w <= n-k and targets >= 1)):
         return None
+    if codewords is not None and (type(codewords) is not int or codewords < 1 or targets != 1):
+        return None
     bound = memory_bound_log2_bits
     if bound is not None and (isinstance(bound, bool) or not isinstance(bound, (int, float))
                               or not isfinite(bound) or bound < 0):
         return None
-    return deepcopy(_optimize(n, k, w, targets, bound))
+    return deepcopy(_optimize(n, k, w, targets, bound, codewords))

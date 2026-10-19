@@ -24,6 +24,8 @@ from math import comb, expm1, inf, isfinite, log1p, log2
 
 COST_MODEL = "ce-mage-generator-v2"
 TARGET_SUCCESS_MODEL = "independent-target-tree-union-v1"
+QCCF_COST_MODEL = "ce-mage-qccf-codewords-v1"
+CODEWORD_SUCCESS_MODEL = "independent-codeword-tree-union-v1"
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,7 @@ def _transition_log_rows(n, w, z, previous_size, block):
 
 @lru_cache(maxsize=16384)
 def single_target_success_log2(n, k, w, ell, p, delta, blocks, repetitions):
-    """Log survival probability for a valid fixed tree and one unique solution.
+    """Log survival for one specified solution in the uniform-support model.
 
     ``blocks`` and ``repetitions`` must be tuples; public fixed-point validation
     is performed by :func:`evaluate_parameters`.  The final zero window uses
@@ -148,7 +150,8 @@ def _tree_gaussian_logs(n, k, blocks, repetitions):
 
 
 def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=None,
-                        targets=None, memory_bound_log2_bits=None, targets_used=None):
+                        targets=None, memory_bound_log2_bits=None, targets_used=None,
+                        codewords=None):
     """Evaluate a fixed CE-priced MAGE-Stern tree, or return None if invalid.
 
     ``blocks=(k,), repetitions=(1,1)`` is the ordinary Stern branching
@@ -163,10 +166,20 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
     one target use the full survival recursion.  Each target is assumed to
     have one accepted solution; independent errors alone do not establish
     whole-tree independence when targets share a randomized tree.
+
+    A positive integer ``codewords`` selects the QCCF multiple-codeword proxy
+    for one zero syndrome, requiring ``targets=1``.  All codewords enter only
+    the outer success probability; single-syndrome CE costs are retained,
+    including representative overhead that zero-syndrome code could omit.
+    The uniform-support recursion is a proxy, not an exact rank-conditioned
+    codeword distribution.  p>=1 makes every enumerated information vector
+    nonzero, excluding the zero word when the information set has full rank.
     """
     if targets is None:
         targets = 1 if targets_used is None else targets_used
     if targets_used is not None and (type(targets_used) is not int or targets_used != targets):
+        return None
+    if codewords is not None and (type(codewords) is not int or codewords < 1 or targets != 1):
         return None
     if blocks is None:
         blocks = (k,)
@@ -199,7 +212,7 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
     gaussian, leaves, level_gaussian = _tree_gaussian_logs(n, k, blocks, repetitions)
     tree_work = _logadd(gaussian, leaves+leaf_work)
     single_probability = single_target_success_log2(n, k, w, ell, p, delta, blocks, repetitions)
-    probability = _log_any(single_probability, targets)
+    probability = _log_any(single_probability, targets if codewords is None else codewords)
     if probability == -inf:
         return None
     # Ordinary CE elimination of the input parity-check matrix, followed by
@@ -244,4 +257,21 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
     }
     parameters = {"ell": ell, "p": p, "delta": delta, "blocks": list(blocks),
                   "repetitions": list(repetitions), "targets_used": targets}
+    if codewords is not None:
+        parameters["codewords"] = codewords
+        details.update({
+            "cost_model": QCCF_COST_MODEL,
+            "success_event_kind": "codewords",
+            "codeword_count": codewords,
+            "effective_syndrome_targets": 1,
+            "log2_single_codeword_success_probability": single_probability,
+            "log2_single_target_success_probability": probability,
+            "codeword_success_model": CODEWORD_SUCCESS_MODEL,
+            "target_success_model": CODEWORD_SUCCESS_MODEL,
+            "target_success_formula": "1-(1-single_codeword_tree_survival)**codewords",
+            "target_independence_assumption": "unconditional_independence_of_codeword_tree_failures",
+            "codeword_sampling_model": "uniform_weight_support_proxy",
+            "zero_codeword_exclusion": "positive_information_weight_and_full_rank_information_set",
+            "zero_syndrome_cost_model": "single_syndrome_ce_proxy_including_representative_overhead",
+        })
     return MageCost(_logadd(conversion_work, expected_tree_work), memory, parameters, details)

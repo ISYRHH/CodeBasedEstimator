@@ -44,7 +44,7 @@ def test_default_automatic_mode_preserves_the_two_different_target_semantics(sma
 
 def test_cli_json_costs_adapted_qccf_and_falls_back_for_quantum_qcsd(small_adapted_bike, capsys):
     assert main(["hamming", "--schemes", "BIKE_MLThre", "--json",
-                 "--classical-algorithms", "Prange", "Stern",
+                 "--classical-algorithms", "Prange", "Stern", "MAGE-Stern",
                  "--quantum-algorithms", "QSS", "QMMT+"]) == 0
     key, message = json.loads(capsys.readouterr().out)
     for record in (key, message):
@@ -64,6 +64,11 @@ def test_cli_json_costs_adapted_qccf_and_falls_back_for_quantum_qcsd(small_adapt
         if row["model"] == "quantum":
             assert row["parameters"]["p"] > 0
             assert row["metadata"]["doom"]["postprocessing_speedup_applied"] is False
+        elif row["algorithm"] == "MAGE-Stern":
+            assert row["parameters"]["codewords"] == 11
+            assert row["metadata"]["effective_syndrome_targets"] == 1
+            assert row["metadata"]["doom"]["model"] == "mage_stern_codeword_proxy"
+            assert "active_targets" not in row["metadata"]["doom"]
     assert key["conclusions"]["quantum"]["status"] == "computed"
     assert message["instance"]["problem"]["kind"] == "sd"
     assert message["instance"]["problem"]["log2_solutions"] == 0
@@ -86,9 +91,9 @@ def test_cli_json_costs_adapted_qccf_and_falls_back_for_quantum_qcsd(small_adapt
 
 def test_cli_csv_distinguishes_requested_orbit_context_from_effective_fallback(small_adapted_bike, capsys):
     assert main(["hamming", "--schemes", "BIKE_MLThre", "--csv",
-                 "--classical-algorithms", "Stern", "--quantum-algorithms", "QSS"]) == 0
+                 "--classical-algorithms", "Stern", "MAGE-Stern", "--quantum-algorithms", "QSS"]) == 0
     rows = list(csv.DictReader(io.StringIO(capsys.readouterr().out)))
-    assert len(rows) == 4
+    assert len(rows) == 6
     for row in rows:
         assert row["targets"] == "11"
         if row["goal"] == "key_recovery":
@@ -100,12 +105,16 @@ def test_cli_csv_distinguishes_requested_orbit_context_from_effective_fallback(s
             if row["model"] == "quantum":
                 assert row["cost_model"] == COST_MODEL
                 assert row["cost_model"] != OUTER_PROBABILITY_MODEL
+            elif row["algorithm"] == "MAGE-Stern":
+                assert row["cost_model"] == "ce-mage-qccf-codewords-v1"
+                assert row["active_targets"] == ""
         else:
             assert row["problem_kind"] == "sd" and row["doom"] == "doom:qcsd"
             if row["model"] == "classical":
                 assert row["status"] == "computed"
                 assert 1 <= int(row["active_targets"]) <= 11
-                assert row["cost_model"] == "ce-doom-finite-v1"
+                assert row["cost_model"] == ("ce-mage-generator-v2" if row["algorithm"] == "MAGE-Stern"
+                                              else "ce-doom-finite-v1")
                 assert row["effective_doom"] == "doom:qcsd"
                 assert row["effective_targets"] == row["active_targets"]
             else:

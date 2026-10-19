@@ -122,7 +122,8 @@ class ClassicalModel:
     For QCSD, Prange, Stern, Dumer and BJMM optimize explicit DOOM costs;
     MAGE-Stern integrates targets into its branching cost and probability.
     Remaining binary algorithms use a marked square-root-of-targets approximation.
-    QCCF instead supplies log2(targets) as CE's number of codeword solutions.
+    QCCF supplies log2(targets) as CE's solution count; MAGE instead uses a
+    one-syndrome independent-codeword proxy with the same single-target costs.
     """
 
     name = "classical"
@@ -189,8 +190,11 @@ class ClassicalModel:
     def _mage_applicability(instance: AttackInstance) -> tuple[Problem | None, str]:
         """Keep unsupported structures and solution counts out of the new model."""
         problem = instance.problem
-        if problem.kind not in ("sd", "qcsd"):
-            return None, "MAGE-Stern currently supports only binary SD and QCSD."
+        codeword_finding = problem.kind in ("cfp", "qccf")
+        if problem.kind not in ("sd", "qcsd", "cfp", "qccf"):
+            return None, "MAGE-Stern supports binary SD, QCSD and explicitly tagged QCCF proxies."
+        if codeword_finding and instance.tags != ("doom:qccf",):
+            return None, "MAGE-Stern codeword finding requires exactly the doom:qccf tag."
         try:
             problem = Problem("sd", dict(problem.parameters), problem.log2_solutions)
         except ValueError as exc:
@@ -201,7 +205,7 @@ class ClassicalModel:
             return None, "MAGE-Stern currently supports one acceptable solution per syndrome (log2_solutions=0)."
         if instance.structure:
             return None, "MAGE-Stern has no reduction for additional structure: " + ", ".join(instance.structure)
-        if instance.tags not in ((), ("doom:qcsd",)):
+        if not codeword_finding and instance.tags not in ((), ("doom:qcsd",)):
             return None, "MAGE-Stern supports only untagged SD or the doom:qcsd target model."
         if not instance.tags and instance.targets != 1:
             return None, "MAGE-Stern requires doom:qcsd for multiple syndrome targets."
@@ -213,14 +217,16 @@ class ClassicalModel:
         if reason:
             return self._unsupported(name, instance, reason)
         parameters = problem.parameters
-        effective_solutions = problem.log2_solutions
-        if effective_solutions is None:
+        codeword_finding = instance.tags == ("doom:qccf",)
+        effective_solutions = (math.log2(instance.targets) if codeword_finding
+                               else problem.log2_solutions)
+        if not codeword_finding and effective_solutions is None:
             # Read CE's problem convention without running another algorithm.
             sd_problem = importlib.import_module("cryptographic_estimators.SDEstimator.sd_problem")
             effective_solutions = sd_problem.SDProblem(
                 parameters["n"], parameters["k"], parameters["w"],
             ).nsolutions
-        if effective_solutions != 0:
+        if not codeword_finding and effective_solutions != 0:
             return self._unsupported(
                 name, instance,
                 "MAGE-Stern currently supports one solution per syndrome; the CE default "
@@ -228,24 +234,30 @@ class ClassicalModel:
                 "to compare under a single-solution assumption.",
             )
         from .mage_search import optimize
-        from .mage_costs import COST_MODEL, TARGET_SUCCESS_MODEL
+        from .mage_costs import (COST_MODEL, TARGET_SUCCESS_MODEL,
+                                 QCCF_COST_MODEL, CODEWORD_SUCCESS_MODEL)
 
+        search_options = {"algorithm": name,
+                          "targets": 1 if codeword_finding else instance.targets,
+                          "memory_bound_log2_bits": options.memory_bound_log2_bits}
+        if codeword_finding:
+            search_options["codewords"] = instance.targets
         cost = optimize(parameters["n"], parameters["k"], parameters["w"],
-                        algorithm=name, targets=instance.targets,
-                        memory_bound_log2_bits=options.memory_bound_log2_bits)
+                        **search_options)
         details = {
             "estimator": "local MAGE-Stern",
-            "cost_model": COST_MODEL,
-            "target_success_model": TARGET_SUCCESS_MODEL,
+            "cost_model": QCCF_COST_MODEL if codeword_finding else COST_MODEL,
+            "target_success_model": CODEWORD_SUCCESS_MODEL if codeword_finding else TARGET_SUCCESS_MODEL,
             "bit_complexities": 1,
             "complexity_type": 0,
             "memory_access": 0,
             "memory_bound_log2_bits": options.memory_bound_log2_bits,
             "tags": list(instance.tags),
             "targets": instance.targets,
-            "effective_log2_solutions": 0,
+            "effective_log2_solutions": effective_solutions,
             "solution_count_policy": (
-                "CE default equals one solution per syndrome"
+                "QCCF targets count all usable nonzero codewords of one zero syndrome"
+                if codeword_finding else "CE default equals one solution per syndrome"
                 if problem.log2_solutions is None else "explicit log2 count"
             ),
             "heuristic": True,
@@ -254,8 +266,14 @@ class ClassicalModel:
                 "vector_operation_bit_cost": parameters["n"],
                 "list_record_bits": parameters["n"],
                 "partial_elimination": "n*k*b bit operations per generator-matrix block of b pivots",
-                "target_transform": "n*k bit operations per target per leaf",
-                "target_storage": "full n-bit vectors and a target-expanded right list",
+                "target_transform": (
+                    "one n*k zero-representative transform per leaf retained as CE proxy overhead"
+                    if codeword_finding else "n*k bit operations per target per leaf"
+                ),
+                "target_storage": (
+                    "one n-bit representative and two unexpanded full-vector lists"
+                    if codeword_finding else "full n-bit vectors and a target-expanded right list"
+                ),
                 "input_conversion": "parity-check to generator conversion charged once",
             },
         }
@@ -279,21 +297,52 @@ class ClassicalModel:
                 "active_targets": cost.parameters.get("targets_used", instance.targets) if cost else None,
                 "postprocessing_speedup_applied": False,
             }
-        assumptions = (
+        if codeword_finding:
+            details.update({
+                "codeword_finding": True,
+                "target_semantics": "nonzero_codewords",
+                "effective_syndrome_targets": 1,
+                "available_codewords": instance.targets,
+                "codeword_sampling_model": "uniform_weight_support_proxy",
+                "zero_syndrome_cost_model": "single_syndrome_ce_proxy_including_representative_overhead",
+                "doom": {
+                    "model": "mage_stern_codeword_proxy",
+                    "cost_model": QCCF_COST_MODEL,
+                    "available_targets": instance.targets,
+                    "available_codewords": instance.targets,
+                    "active_codewords": instance.targets if feasible else None,
+                    "effective_syndrome_targets": 1,
+                    "effective_log2_solutions": effective_solutions,
+                    "postprocessing_speedup_applied": False,
+                },
+            })
+        probability_assumptions = (
+            "QCCF uses a uniform-weight-support codeword proxy for one zero syndrome. "
+            "The single-word recursion is not an exact rank-conditioned codeword distribution.",
+            "Whole-tree failures for the supplied nonzero codewords are assumed mutually independent; "
+            "success is 1-(1-S_cw)^M. Codeword and QC-orbit correlations are not derived from M.",
+            "All M codewords enter only the outer probability before tree optimization. "
+            "Single-syndrome CE costs are retained, including representative overhead that "
+            "a zero-syndrome implementation could omit; no M-fold lists or target discount are applied.",
+            "p>=1 and 2*p-delta>=1 exclude the zero information vector and, with a full-rank "
+            "information set, the zero codeword. The two lists use disjoint information coordinates.",
+        ) if codeword_finding else (
             "Binary random-code SD with one acceptable solution per syndrome.",
             "Whole-tree failures for distinct targets are assumed mutually independent; "
             "success is 1-(1-S)^u for single-target tree success S. Independent errors alone "
             "do not establish this assumption for a shared randomized tree.",
+        )
+        assumptions = probability_assumptions + (
             "Complete tree executions are charged without early stopping, with independent "
             "randomized retries until success.",
             "CE-compatible constant-cost memory access, n-bit vector operations and list storage; "
             "finite MAGE-Stern branching probabilities and partial elimination are modeled locally.",
-            "Generator partial elimination costs n*k*b bit operations for b pivots; each leaf "
-            "transforms each target for n*k bit operations. Both full-vector lists, the target-expanded right list, "
+            "Generator partial elimination costs n*k*b bit operations for b pivots; the CE baseline "
+            "charges n*k per represented syndrome per leaf. Full-vector lists, representative storage "
             "and parity-check-to-generator conversion storage are charged.",
             "The bounded parameter search returns the best evaluated point, not a proof of global optimality.",
         )
-        if instance.tags:
+        if instance.tags == ("doom:qcsd",):
             assumptions += (
                 "QCSD syndrome targets are usable under the model's random-error branching assumptions; "
                 "correlations between cyclic shifts are not modeled and no separate sqrt(targets) discount is applied.",
