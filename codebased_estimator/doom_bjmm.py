@@ -1,7 +1,7 @@
 """Finite depth-two BJMM terms for a target-aware classical DOOM estimate.
 
 The construction follows Esser--May--Zweydinger, *McEliece needs a Break*,
-Sections 2 and 5.1 (pp. 6--8 and 18--19 of BJMMDOOM.pdf): only the fourth
+Sections 2 and 5.1: only the fourth
 base list carries syndromes, and its weight may decrease to compensate for
 the target multiplicity.  The half-wise weight and representation counts
 below refine the paper's unsplit approximation in the same way as CE's BJMMd2.

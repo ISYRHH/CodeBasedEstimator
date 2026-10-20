@@ -22,7 +22,7 @@ from codebased_estimator.hamming import (
 
 # Independently recorded reference tuples, rather than recomputing the adapter
 # formulas in the assertions: (n, key k, key w, message k, message w, q).
-# QCTM and UVW intentionally have no key tuple in HammingISD.md.
+# QCTM and UVW intentionally have no generic key-recovery tuple.
 EXPECTED = {
     "BIKE_MLThre": {
         "BIKE_MLThre-128": (24646, 12323, 142, 12323, 134, 2),
@@ -31,12 +31,11 @@ EXPECTED = {
         "BIKE_MLThre-512": (300002, 150001, 546, 150001, 524, 2),
     },
     "TRIKE": {
-        "TRIKE-1": (30903, 20602, 81, 10301, 201, 2),
-        "TRIKE-2": (46743, 31162, 105, 15581, 263, 2),
-        "TRIKE-3": (66009, 44006, 123, 22003, 319, 2),
-        "TRIKE-5": (106089, 70726, 165, 35363, 429, 2),
-        "TRIKE-7": (209073, 139382, 249, 69691, 659, 2),
-        "TRIKE-9": (342129, 228086, 333, 114043, 877, 2),
+        "TRIKE-1": (28311, 18874, 81, 9437, 201, 2),
+        "TRIKE-3": (57543, 38362, 123, 19181, 319, 2),
+        "TRIKE-5": (98961, 65974, 165, 32987, 429, 2),
+        "TRIKE-7": (188943, 125962, 249, 62981, 659, 2),
+        "TRIKE-9": (309129, 206086, 333, 103043, 877, 2),
     },
     "HARE": {
         "HARE-128": (41798, 20899, 158, 20899, 158, 2),
@@ -89,7 +88,7 @@ EXPECTED = {
 
 EXPECTED_TARGETS = {
     "BIKE_MLThre": [12323, 24659, 40973, 150001],
-    "TRIKE": [10301, 15581, 22003, 35363, 69691, 114043],
+    "TRIKE": [9437, 19181, 32987, 62981, 103043],
     "HARE": [20899, 52379, 104869, 173981],
     "NSS-HQC": [29443, 54493, 122579, 217901],
     "TriQ-KEM": [16301, 50363, 97651, 157627],
@@ -115,8 +114,8 @@ def test_every_submission_instance_has_the_reference_decoding_tuple(scheme, para
         attack = instances[0]
         assert (attack.scheme, attack.parameter_set, attack.goal) == (scheme, parameter_set, goal)
         assert attack.structure == ()
-        assert any("HammingISD.md" in ref for ref in attack.references)
-        assert any("local/HammingSchemes/" in ref for ref in attack.references)
+        assert any(ref.startswith(scheme) for ref in attack.references)
+        assert all("/" not in ref and "\\" not in ref for ref in attack.references)
         assert any("Unbalanced" in note for note in attack.assumptions)
         if k is None:
             assert attack.problem.kind == "structural_key_recovery"
@@ -132,7 +131,6 @@ def test_every_submission_instance_has_the_reference_decoding_tuple(scheme, para
                 assert attack.problem.log2_solutions == (None if is_qccf else 0)
                 expected_targets = dict(zip(EXPECTED[scheme], EXPECTED_TARGETS[scheme]))
                 assert attack.targets == expected_targets[parameter_set]
-                assert any("isd_parameter_mapping.md" in ref for ref in attack.references)
             else:
                 assert attack.problem.kind == "sd"
                 assert attack.problem.log2_solutions == 0
@@ -146,7 +144,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert set(HAMMING_SCHEMES) == set(EXPECTED)
     expected_ids = {parameter_set for sets in EXPECTED.values() for parameter_set in sets}
     catalogue = hamming_catalogue()
-    assert len(catalogue) == len(expected_ids) == 42
+    assert len(catalogue) == len(expected_ids) == 41
     assert {row["parameter_set"] for row in catalogue} == expected_ids
     for scheme, sets in EXPECTED.items():
         assert set(HammingScheme(scheme).parameter_sets) == set(sets)
@@ -157,14 +155,14 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert copied["parameters"]["wx"] == [44, 41]
     assert copied["references"]
     attacks = hamming_instances()
-    assert len(attacks) == len({attack.name for attack in attacks}) == 119
+    assert len(attacks) == len({attack.name for attack in attacks}) == 117
 
 
 def test_batch_filters_goals_and_removes_duplicate_scheme_selections():
     attacks = hamming_instances(schemes=["TRIKE", "UVW-KEM", "TRIKE"],
-                               parameter_sets=["TRIKE-2", "UVW-KEM-128"], goal="msg_recovery")
+                               parameter_sets=["TRIKE-1", "UVW-KEM-128"], goal="msg_recovery")
     assert [(attack.scheme, attack.parameter_set, attack.goal) for attack in attacks] == [
-        ("TRIKE", "TRIKE-2", "msg_recovery"),
+        ("TRIKE", "TRIKE-1", "msg_recovery"),
         ("UVW-KEM", "UVW-KEM-128", "msg_recovery"),
     ]
 
@@ -174,6 +172,7 @@ def test_batch_filters_goals_and_removes_duplicate_scheme_selections():
     {"schemes": []},
     {"parameter_sets": []},
     {"parameter_sets": ["QCTM-128"]},
+    {"parameter_sets": ["TRIKE-2"]},
     {"schemes": ["QCTM"], "parameter_sets": ["UVW-KEM-128"]},
     {"goal": "both_recovery"},
     {"doom": "qcsd"},
@@ -200,7 +199,7 @@ def test_missing_key_reductions_remain_unavailable(scheme, parameter_set, doom):
 @pytest.mark.parametrize("doom", ["auto", "none"])
 @pytest.mark.parametrize("scheme,parameter_set,goal,family", [
     ("BIKE_MLThre", "BIKE_MLThre-128", "key_recovery", "SD"),
-    ("TRIKE", "TRIKE-2", "key_recovery", "SD"),
+    ("TRIKE", "TRIKE-1", "key_recovery", "SD"),
     ("UVW-KEM", "UVW-KEM-128", "msg_recovery", "SDFq"),
 ])
 def test_real_prange_costs_match_direct_upstream_solution_counts(scheme, parameter_set, goal, family, doom):
@@ -416,13 +415,48 @@ def test_cli_rejects_invalid_or_conflicting_selection(arguments, capsys):
     assert "error:" in capsys.readouterr().err
 
 
-def test_cli_details_prints_mapping_and_submission_sources(capsys):
+def test_cli_no_brief_keeps_parameter_source_and_unavailable_reason(capsys):
     assert main(["hamming", "--parameter-sets", "QCTM128", "--goal", "key_recovery",
-                 "--classical-algorithms", "Prange", "--details", "--no-brief"]) == 0
+                 "--classical-algorithms", "Prange", "--quantum-algorithms",
+                 "--details", "--no-brief"]) == 0
     output = capsys.readouterr().out
-    assert "Source: local/notes/HammingISD.md" in output
-    assert "Source: local/HammingSchemes/QCTM/" in output
+    assert "Source: QCTM" in output
+    assert "structural key attacks" in output
     assert "Best classical: -- (unavailable)" in output
+    assert "not_requested" not in output
+    assert "Assumption:" not in output
+
+
+def test_cli_no_brief_shows_routes_and_deduplicates_sources_without_model_prose(capsys):
+    args = ["hamming", "--parameter-sets", "TRIKE-1", "--classical-algorithms", "Prange",
+            "--quantum-algorithms"]
+    assert main([*args, "--no-brief"]) == 0
+    output = capsys.readouterr().out
+    assert "Route:" in output
+    assert "(3r,2r,w)" in output and "(3r,r,t)" in output
+    assert "log2_solutions=0" in output
+    assert "targets=9437" in output
+    assert output.count("Source: TRIKE") == 1
+    assert "v1.6" in output
+    assert "source parameters=" not in output
+    assert "Assumption:" not in output
+    assert "Cost proxy:" not in output
+    assert "Minimum time among" not in output
+    assert "not_requested" not in output
+    assert "Best classical: Prange" in output
+
+    assert main([*args, "--no-brief", "--json"]) == 0
+    records = json.loads(capsys.readouterr().out)
+    assert len(records) == 2
+    assert all(record["instance"]["assumptions"] for record in records)
+    assert all(record["conclusions"]["classical"]["reason"] for record in records)
+
+    assert main(["hamming", "--schemes", "TRIKE", "--list", "--no-brief"]) == 0
+    output = capsys.readouterr().out
+    assert "TRIKE-1" in output and "TRIKE-9" in output
+    assert "'r': 9437" in output
+    assert output.count("Source: TRIKE") == 1
+    assert "total error weight" not in output
 
 
 def test_cli_csv_rejects_conflicting_details_format(capsys):

@@ -1,6 +1,6 @@
 # CodeBasedEstimator
 
-编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、本地 MAGE-Stern 和二元 SD 的 QSS／QMMT+ 量子估计；内置 9 个 Hamming 方案、42 组参数。算法口径与适用范围见[模型说明](docs/model.md)，Mito/QUBE 参数见[参数一致性](docs/parameter_consistency.md)。
+编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、本地 MAGE-Stern 和二元 SD 的 QSS／QMMT+ 量子估计；内置 9 个 Hamming 方案、41 组参数。算法口径与适用范围见[模型说明](docs/model.md)，TRIKE v1.6、Mito/QUBE 参数见[参数一致性](docs/parameter_consistency.md)。
 
 ## 安装
 
@@ -36,7 +36,7 @@ python3 -m venv .venv
 ## 输出
 
 - 时间／内存为 log₂ 值；经典单位为位操作／bits，量子时间为 `quantum_bit_operations`，量子内存未估计。结果是所选路线的模型成本，不代表设备耗时或方案安全位数。
-- `--json` 输出完整报告，`hamming --csv` 输出逐算法摘要；`--no-brief` 展开假设与来源。
+- `--json` 输出完整报告，`hamming --csv` 输出逐算法摘要；`--no-brief` 补充路线、解数、实际使用的目标数及参数来源，同一来源只显示一次。模型假设与适用范围见[模型说明](docs/model.md)。
 
 ## Python API
 

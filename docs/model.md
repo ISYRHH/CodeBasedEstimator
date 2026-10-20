@@ -72,7 +72,7 @@ $$
 
 ## 内置 Hamming 方案的 DOOM 映射
 
-[hamming.py](../codebased_estimator/hamming.py) 将 42 组参数展开为 119 条路线。下表 $r$ 为基础循环块长，Mito 的 $d=2^\ell$ 为环坐标数。
+[hamming.py](../codebased_estimator/hamming.py) 将 41 组参数展开为 117 条路线。下表 $r$ 为基础循环块长，Mito 的 $d=2^\ell$ 为环坐标数。
 
 | 方案 | 密钥恢复 | 消息恢复 | `doom="auto"` 目标数 |
 |---|---|---|---|
@@ -93,10 +93,12 @@ QCSD 路线每综合征单解。`doom="none"` 将可用路线改为普通 SD、�
 | Mito，$W_u=\sum_i(w_r[i]+w_t[i])$ | $(2dr,dr,W_u)$ | $((2d+1)r,dr,W_u+w_e)$ |
 | QUBE | $(3r,2r,2w_f+w_g)$ | $(4r,2r,2w_f+w_g+w_e)$ |
 
-Mito 复合路线保留第零环分量投影，只采用 $r$ 个同时循环移位目标。密钥 `parity` 路线令 $W=\sum_i(w_x[i]+w_y[i])$，将 `baseline` 的 $(2dr,dr,W)$ 改为 $(2dr,dr-d,W)$；新增 $d$ 个独立校验行的秩是精确的，成本按同秩随机 SD 估计，不再额外扣除 $d$ 位。结构与来源由 [MitoKeyParity](../codebased_estimator/mito_parity.py) 及 `instance.cost_proxy` 保存。
+Mito 复合路线保留第零环分量投影，只采用 $r$ 个同时循环移位目标。密钥 `parity` 路线（`mito-key-parity-rank-v1`）令 $W=\sum_i(w_x[i]+w_y[i])$，将 `baseline` 的 $(2dr,dr,W)$ 改为 $(2dr,dr-d,W)$；新增 $d$ 个独立校验行的秩是精确的，成本按同秩随机 SD 估计，不再额外扣除 $d$ 位。这是通用成本近似，不是针对结构化 P 问题的专用攻击。结构与来源由 [MitoKeyParity](../codebased_estimator/mito_parity.py) 及 `instance.cost_proxy` 保存。
 
 ## 结果与复核
 
 同一方案、参数集和恢复目标下，以相同选项比较可行、已计算且时间单位一致的结果；经典与量子分别选最小时间，精确并列全部保留。参数搜索受预算限制，不保证全局最优；量子结果也不表示内存可行。
 
-JSON 保存完整 `instance`、`options`、模型版本、成本分解和搜索记录，可据此复核。CSV 中 `is_best`／`is_best_route` 区分路线内／跨路线胜者，`effective_doom`／`effective_targets` 表示实际模型。逐实例 `references` 保留来源，详细推导和独立核验保留在本地 `local/path_audit/`。
+文本结果保留参数、算法状态、时间／内存和择优结果。`--no-brief` 补充路线公式、解数、内存上限及实际使用的目标数，并汇总参数来源；通用假设和模型限制集中在本文说明。`--list-routes` 只列出路线及对应问题参数。
+
+JSON 保存完整 `instance`、`options`、模型版本、成本分解和搜索记录，可据此复核。`instance.cost_proxy` 保留 Mito parity 等路线的结构化模型说明，`references` 仅记录参数来源及已知规格版本。CSV 中 `is_best`／`is_best_route` 区分路线内／跨路线胜者，`effective_doom`／`effective_targets` 表示实际模型。

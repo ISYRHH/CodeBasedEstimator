@@ -81,17 +81,12 @@ def _hamming_summary(reports):
                if report.instance.problem.kind == "structural_key_recovery"}
     for reason in missing.values():
         print(f"Unavailable: {reason}")
-    _proxy_notes(report.instance for report in reports)
-    print("Use --details for per-algorithm rows; --no-brief for assumptions and sources.")
+    print("Use --details for per-algorithm rows; --no-brief for route and input details.")
 
 
-def _proxy_notes(instances):
-    seen = set()
-    for instance in instances:
-        proxy = instance.cost_proxy
-        if proxy and proxy.get("name") not in seen:
-            seen.add(proxy.get("name"))
-            print(f"Cost proxy: {proxy.get('name', 'unspecified')}: {proxy.get('scope', 'heuristic approximation')}")
+def _sources(references):
+    for reference in dict.fromkeys(references):
+        print(f"Source: {reference}")
 
 
 def _hamming_routes(instances, *, as_json=False):
@@ -117,7 +112,6 @@ def _hamming_routes(instances, *, as_json=False):
                 p["log2_solutions"] = i.problem.log2_solutions
             parameters = ", ".join(f"{name}={value}" for name, value in p.items())
         print(f"{i.parameter_set:21} {i.goal:12} {i.route_id or 'default':9} {problem:23} {parameters}")
-    _proxy_notes(instances)
 
 
 def _route_summary(comparisons):
@@ -139,15 +133,17 @@ def _route_summary(comparisons):
 
 def _table(reports, *, brief=True):
     print("Costs are log2 in the units shown for each row; '--' means unavailable.")
-    if not brief:
-        print("Each row estimates one decoding route, not overall scheme security.")
     for report in reports:
         i = report.instance
         print(f"\n{i.name} | {i.goal} | {i.problem.kind} {i.problem.parameters}")
-        if not brief:
-            print(f"  {i.route}")
+        if not brief and i.route:
+            print(f"  Route: {i.route}")
         print(f"  tags={list(i.tags)}; targets={i.targets}")
-        _proxy_notes((i,))
+        if not brief and i.problem.kind == "sd":
+            solutions = i.problem.log2_solutions
+            print(f"  log2_solutions={solutions if solutions is not None else 'auto'}")
+        if not brief and report.options.memory_bound_log2_bits is not None:
+            print(f"  memory_bound_log2_bits={report.options.memory_bound_log2_bits}")
         if report.options.quantum_algorithms and report.options.quantum_matrix_profile != DEFAULT_MATRIX_PROFILE:
             print(f"  Quantum matrix profile: {report.options.quantum_matrix_profile}")
         print(f"  {'algorithm':24} {'model':10} {'status':17} {'time':>9} {'memory':>9}  units (time / memory); parameters")
@@ -157,35 +153,42 @@ def _table(reports, *, brief=True):
                 "--" if r.memory_log2 is None else f"{r.memory_log2:.3f}"
             )
             print(f"  {r.algorithm:24} {r.model:10} {r.status:17} {time:>9} {memory:>9}  {r.time_unit} / {r.memory_unit}; {r.parameters}")
-            if r.reason and (not brief or r.status != "computed"):
+            if r.reason and r.status != "computed" and (brief or r.reason != i.route):
                 print(f"    {r.reason}")
-        if brief:
-            fallback = [r.algorithm for r in report.results if r.status == "computed"
-                        and r.metadata.get("doom", {}).get("model") == "single_target_fallback"]
-            if fallback:
-                print(f"  DOOM fallback: {', '.join(fallback)} use single-target SD (targets=1).")
-            if report.options.memory_bound_log2_bits is not None and any(
-                r.is_time_only_quantum for r in report.results
-            ):
-                print("  Quantum memory bound is not applied (time-only estimates).")
+        fallback = [r.algorithm for r in report.results if r.status == "computed"
+                    and r.metadata.get("doom", {}).get("model") == "single_target_fallback"]
+        if fallback:
+            print(f"  DOOM fallback: {', '.join(fallback)} use single-target SD (targets=1).")
+        if not brief:
+            used_targets = [
+                f"{r.algorithm}={r.metadata['doom']['active_targets']}"
+                for r in report.results
+                if r.status == "computed"
+                and r.metadata.get("doom", {}).get("model") != "single_target_fallback"
+                and r.metadata.get("doom", {}).get("active_targets") not in (None, i.targets)
+            ]
+            if used_targets:
+                print(f"  Targets used: {', '.join(used_targets)}")
+        if report.options.memory_bound_log2_bits is not None and any(
+            r.is_time_only_quantum for r in report.results
+        ):
+            print("  Quantum memory bound is not applied (time-only estimates).")
         for family, conclusion in report.conclusions.items():
+            if conclusion.status == "not_requested":
+                continue
             if conclusion.best:
                 for best in conclusion.best:
                     memory = ("not estimated" if best.is_time_only_quantum else
                               f"2^{best.memory_log2:.3f} {best.memory_unit}")
                     print(f"  Best {family}: {best.algorithm} | "
                           f"time=2^{best.time_log2:.3f} {best.time_unit}; "
-                          f"memory={memory}; "
-                          f"parameters={best.parameters}")
+                          f"memory={memory}")
             else:
                 print(f"  Best {family}: -- ({conclusion.status})")
-            if not brief:
+            if conclusion.status == "incomparable_units":
                 print(f"    {conclusion.reason}")
-        if not brief:
-            for note in i.assumptions:
-                print(f"  Assumption: {note}")
-            for reference in i.references:
-                print(f"  Source: {reference}")
+    if not brief:
+        _sources(reference for report in reports for reference in report.instance.references)
 
 
 def main(argv=None) -> int:
@@ -201,7 +204,7 @@ def main(argv=None) -> int:
     run.add_argument("--log2-solutions", "--nsolutions", dest="log2_solutions", type=float,
                      help="override log2 of the acceptable solution count per syndrome (CE nsolutions); omit for QCCF")
     demo.set_defaults(doom=None, targets=None, log2_solutions=None)
-    hamming = commands.add_parser("hamming", help="evaluate HammingSchemes snapshots with scheme-specific DOOM proxies")
+    hamming = commands.add_parser("hamming", help="evaluate built-in Hamming parameters and recovery routes")
     hamming.add_argument("--schemes", nargs="+", choices=HAMMING_SCHEMES, help="default: all nine schemes")
     hamming.add_argument("--parameter-sets", nargs="+", help="exact IDs from --list; default: all sets of selected schemes")
     hamming.add_argument("--goal", choices=("both", "key_recovery", "msg_recovery"), default="both")
@@ -211,12 +214,12 @@ def main(argv=None) -> int:
     listing.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
     listing.add_argument("--list-routes", action="store_true", help="list key/msg recovery problems and mapped parameters without running estimators")
     hamming.add_argument("--all-classical", action="store_true", help="use all default classical candidates per field (already the default)")
-    hamming.add_argument("--details", action="store_true", help="print per-algorithm tables; use --no-brief for assumptions and sources")
+    hamming.add_argument("--details", action="store_true", help="print per-algorithm tables; use --no-brief for route and input details")
     hamming.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
     hamming.set_defaults(targets=None, log2_solutions=None)
     for command in (demo, run, hamming):
         command.add_argument("--brief", action=argparse.BooleanOptionalAction, default=True,
-                             help="reduce text notes, assumptions and sources (default: on); --no-brief shows full text; JSON/CSV unchanged")
+                             help="compact text (default: on); --no-brief adds route, input details and parameter sources; JSON/CSV unchanged")
         command.add_argument("--classical-algorithms", nargs="*", help="classical names; default: all candidates for the problem family (demo uses a small selection); empty disables classical")
         command.add_argument("--quantum-algorithms", nargs="*", help="quantum names; default: all registered candidates (demo uses explicit selections); empty disables quantum")
         command.add_argument("--quantum-matrix-profile", choices=MATRIX_PROFILES,
@@ -262,9 +265,8 @@ def main(argv=None) -> int:
                 else:
                     for row in catalogue:
                         print(f"{row['parameter_set']:21} {row['scheme']:12} {row['parameters']}")
-                        if not args.brief:
-                            for note in row.get("notes", ()):
-                                print(f"  {note}")
+                    if not args.brief:
+                        _sources(reference for row in catalogue for reference in row["references"])
                 return 0
             jobs = [(instance, DEFAULT_HAMMING_ALGORITHMS, QUANTUM_ALGORITHMS) for instance in instances]
         else:
