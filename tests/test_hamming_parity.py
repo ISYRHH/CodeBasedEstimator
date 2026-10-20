@@ -117,15 +117,14 @@ def test_cli_target_override_keeps_source_provenance_separate(small_mito, capsys
     assert parity["results"][0]["metadata"]["targets"] == 3
 
 
-@pytest.mark.parametrize("format", ["text", "details", "json", "csv", "list"])
-def test_parity_proxy_and_comparison_are_visible_in_all_cli_formats(small_mito, capsys, format):
+@pytest.mark.parametrize("format", ["text", "details", "no-brief", "json", "csv", "list"])
+def test_parity_comparison_stays_visible_with_proxy_provenance_in_structured_output(small_mito, capsys, format):
     args = ["hamming", "--schemes", "Mito", "--goal", "key_recovery",
             "--classical-algorithms", "Prange", "--quantum-algorithms"]
     if format != "text":
         args.append("--list-routes" if format == "list" else f"--{format}")
     assert main(args) == 0
     output = capsys.readouterr().out
-    assert "mito-key-parity-rank-v1" in output
     if format == "json":
         records = json.loads(output)
         assert [r["instance"]["route_id"] for r in records] == ["baseline", "parity"]
@@ -137,6 +136,9 @@ def test_parity_proxy_and_comparison_are_visible_in_all_cli_formats(small_mito, 
         assert any(r["is_best_route"] == "True" for r in records)
         assert records[1]["cost_proxy"] == "mito-key-parity-rank-v1"
     else:
-        assert "heuristic random-SD cost" in output
+        assert "parity" in output
+        assert "mito-key-parity-rank-v1" not in output
+        assert "Cost proxy:" not in output
+        assert "heuristic random-SD cost" not in output
         if format != "list":
             assert "Best classical route:" in output

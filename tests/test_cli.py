@@ -26,7 +26,7 @@ def attack_file(tmp_path):
 def quantum_cost(monkeypatch):
     cost = SimpleNamespace(time_log2=19.5, parameters={"ell": 0, "p": 0},
                            details={}, search={"method": "test fixture"})
-    monkeypatch.setattr("codebased_estimator.quantum.optimize", lambda *args: cost)
+    monkeypatch.setattr("codebased_estimator.quantum.optimize", lambda *args, **kwargs: cost)
     return cost
 
 
@@ -94,7 +94,7 @@ def test_cli_prints_separate_classical_and_quantum_conclusions(attack_file, caps
     output = capsys.readouterr().out
     assert "Best classical: Prange | time=2^" in output
     assert "bit_operations; memory=2^" in output
-    assert "bits; parameters=" in output
+    assert "bits; parameters=" not in output
     assert "Best quantum: QSS | time=2^" in output
 
 
@@ -206,19 +206,30 @@ def test_cli_demo_has_one_record_per_instance_with_hamming_quantum_rows(capsys, 
                    for row in record["results"])
 
 
+@pytest.mark.parametrize("detail", [[], ["--no-brief"]])
 def test_cli_prints_time_only_quantum_result_without_claiming_memory_feasibility(
-    attack_file, capsys, quantum_cost,
+    attack_file, capsys, quantum_cost, detail,
 ):
     data = json.loads(attack_file.read_text())
     data["problem"]["log2_solutions"] = 0
     attack_file.write_text(json.dumps(data))
     assert main(["estimate", str(attack_file), "--classical-algorithms",
-                 "--quantum-algorithms", "QSS", "--memory-bound", "0"]) == 0
+                 "--quantum-algorithms", "QSS", "--memory-bound", "0", *detail]) == 0
     output = capsys.readouterr().out
     assert "Best quantum: QSS | time=2^19.500 quantum_bit_operations" in output
     assert "memory=not estimated" in output
     assert "memory bound is not applied" in output
     assert "feasible memory" not in output
+
+
+@pytest.mark.parametrize("detail", [[], ["--no-brief"]])
+def test_cli_text_keeps_doom_fallback_visible(attack_file, capsys, quantum_cost, detail):
+    assert main(["estimate", str(attack_file), "--doom", "qcsd", "--targets", "32",
+                 "--classical-algorithms", "--quantum-algorithms", "QSS", *detail]) == 0
+    output = capsys.readouterr().out
+    assert "DOOM fallback: QSS use single-target SD (targets=1)." in output
+    assert "Best quantum: QSS" in output
+    assert "Heuristic time-only estimate;" not in output
 
 
 def test_cli_rejects_removed_model_flag(attack_file, capsys):

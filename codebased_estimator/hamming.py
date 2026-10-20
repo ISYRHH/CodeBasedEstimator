@@ -1,7 +1,6 @@
 """Submission decoding routes with scheme-specific DOOM target semantics.
 
-The parameter catalogue is a reviewed snapshot of the local submissions, so
-installed packages also work without the (untracked) local/ directory.
+The parameter catalogue contains a self-contained, reviewed parameter snapshot.
 """
 
 from __future__ import annotations
@@ -21,23 +20,8 @@ HAMMING_SCHEMES = (
 GOALS = ("key_recovery", "msg_recovery")
 # Resolve all classical candidates in the appropriate upstream field backend.
 DEFAULT_HAMMING_ALGORITHMS = None
-MAPPING_REFERENCE = "local/notes/HammingISD.md: 各算法 ISD 实例（未考虑 DOOM/Unbalanced 等）"
-DOOM_REFERENCE = "local/notes/isd_parameter_mapping.md: DOOM 应作为单独维度"
 DOOM_MODES = ("auto", "none")
 COMPOSITE_MSG_SCHEMES = ("HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE")
-
-# These references support the public equations / automorphisms as well as the
-# authors' DOOM discussions. The adapters need no runtime access to local/.
-_DOOM_REFERENCES = {
-    "BIKE_MLThre": "local/HammingSchemes/BIKE_MLThre/Algorithm specifications/BIKE_MLThre.pdf: pages 4-5, KeyGen/Encaps; pages 26-27, section 3.2.1",
-    "TRIKE": "local/HammingSchemes/TRIKE/Algorithm specifications/TRIKE算法文档.pdf: page 26, section 5.1",
-    "HARE": "local/HammingSchemes/HARE/Algorithm specifications/HARE算法文档.pdf: pages 19-20, ISD/DOOM analysis",
-    "NSS-HQC": "local/HammingSchemes/NSS-HQC/Algorithm specifications/NSS-HQC算法文本.pdf: pages 17-20, Algorithms 1-2 and equations (32), (36); pages 36-37, section 4.4",
-    "TriQ-KEM": "local/HammingSchemes/TriQ-KEM/Algorithm specifications/Algorithm specifications.pdf: page 21, equation (13)",
-    "Mito": "local/HammingSchemes/Mito/Algorithm specifications/Algorithm Specification.pdf: PDF page 51 (printed page 50), section 4.3.1 and Table 4.7",
-    "QUBE": "local/HammingSchemes/QUBE/Algorithm specifications/Algorithm specifications.pdf: page 22, Theorem 4",
-    "QCTM": "local/HammingSchemes/QCTM/Algorithm specifications/Algorithm_Text_en.pdf: pages 11-12, MatGen; page 16, Definition 3; pages 18-19, DOOM and Tables 1-3",
-}
 
 _ASSUMPTIONS = (
     "Generic ISD cost proxy for the documented recovery route; not a whole-scheme security estimate.",
@@ -55,13 +39,6 @@ _MSG_ASSUMPTIONS = (
     "Compression/quantization residuals are not modeled; this is a simplified cost proxy, "
     "not a reduction from the actual unknown-message ciphertext.",
 )
-_COMPOSITE_REFERENCES = {
-    "HARE": "local/HammingSchemes/HARE/Algorithm specifications/HARE算法文档.pdf: pages 9-10, 16-20, joint core and Table 4",
-    "NSS-HQC": "local/HammingSchemes/NSS-HQC/Algorithm specifications/NSS-HQC算法文本.pdf: pages 36-40, uncompressed SD(3n,n,wr1+wr2+we) core proxy",
-    "TriQ-KEM": "local/HammingSchemes/TriQ-KEM/Algorithm specifications/Algorithm specifications.pdf: page 8, encryption; page 22, Table 12",
-    "Mito": "local/HammingSchemes/Mito/Algorithm specifications/Algorithm Specification.pdf: PDF pages 26-29, Pr and encryption; page 50, Tables 4.4-4.6 (ring-length correction applied)",
-    "QUBE": "local/HammingSchemes/QUBE/Algorithm specifications/Algorithm specifications.pdf: page 14, equation (3); page 22, Theorem 4",
-}
 
 
 def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
@@ -87,8 +64,7 @@ def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
     return replace(
         baseline, name=f"{entry['parameter_set']}/key_recovery/parity", route_id="parity",
         problem=Problem("sd", proxy["effective_parameters"], log2_solutions=0),
-        route="Mito P parity rank cost proxy: (2dr,dr-d,sum(wx_i)+sum(wy_i)); "
-              "H_P=[[I,A_h],[0,E]], rhs=(s,wy mod 2); E=I_d tensor 1_r^T",
+        route="Mito P parity rank model: (n,k,w)=(2dr,dr-d,sum(wx_i)+sum(wy_i))",
         cost_proxy=proxy,
         assumptions=(*baseline.assumptions,
             "The augmented binary matrix has exact rank d*r+d. Generic ISD costs approximate it by "
@@ -102,13 +78,9 @@ def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
             "collapse or CombGap discount; ambient rank gain need not equal independent information on a fixed-weight domain.",
             "DOOM transforms the entire syndrome (s,parity_y) to (P_g*s,D_g*parity_y); "
             "dyadic shifts permute parity labels. The full d*r orbit is a proxy assumption, not guaranteed distinct targets.",
-            "This repairs the local model of P; it supplies neither a search/decision reduction "
+            "This generic cost model of P supplies neither a search/decision reduction "
             "nor an optimality proof for generic ISD and excludes square/folding/lifting attacks.",
         ),
-        references=(*baseline.references,
-            "local/HammingSchemes/Mito/Algorithm specifications/Algorithm Specification.pdf: "
-            "PDF pages 6, 25, 27 (sampler/keygen), 42-44 (P and parity); 50-51 (generic costs)",
-            "docs/model.md: Mito P parity key recovery"),
     )
 
 
@@ -135,6 +107,7 @@ def _composite_message(entry: dict, *, doom: str) -> AttackInstance:
         formula = "(3r,r,wr1+wr2+we)" if scheme == "NSS-HQC" else "(3r,r,2wr+we)"
         equation = "u=r1+h*r2; v-Encode(m)=s*r2+e"
     assumptions = (*_ASSUMPTIONS, *entry.get("notes", ()), *_MSG_ASSUMPTIONS,
+                   f"Joint core equations: {equation}.",
                    "Identity blocks for the first ephemeral vector and e give full row rank; "
                    "one designated acceptable solution per syndrome (log2_solutions=0). "
                    "Parity, fixed block distributions and disjoint supports receive no extra discount.")
@@ -157,14 +130,14 @@ def _composite_message(entry: dict, *, doom: str) -> AttackInstance:
         name=f"{parameter_set}/msg_recovery/composite", route_id="composite",
         scheme=scheme, parameter_set=parameter_set, goal="msg_recovery",
         problem=Problem("sd", {"n": n, "k": k, "w": w, "q": 2}, log2_solutions=0),
-        route=f"Composite message core: {formula}; {equation}; targets={targets}",
+        route=f"Composite message core: (n,k,w)={formula}",
         targets=targets, tags=tags, assumptions=assumptions,
-        references=(*entry["references"], _COMPOSITE_REFERENCES[scheme], "docs/model.md: composite message routes"),
+        references=tuple(entry["references"]),
     )
 
 
 def hamming_catalogue() -> list[dict]:
-    """Return independent records with source parameters and local references."""
+    """Return independent records with source parameters and provenance."""
     return deepcopy(HAMMING_PARAMETERS)
 
 
@@ -201,14 +174,14 @@ class HammingScheme:
         scheme = self.scheme
         assumptions = (*_ASSUMPTIONS, *entry.get("notes", ()))
         targets, tags = 1, ()
-        references = (MAPPING_REFERENCE, *entry["references"])
+        references = tuple(entry["references"])
 
         if key and scheme in ("QCTM", "UVW-KEM"):
             reason = (
-                "HammingISD.md supplies no key-recovery ISD reduction for QCTM; structural key attacks are outside this baseline."
+                "No supported key-recovery ISD reduction for QCTM; structural key attacks are outside this model."
                 if scheme == "QCTM" else
                 "UVW-KEM key recovery requires distinguishing (u,u)D codewords and a weight-dependent codeword-count analysis; "
-                "HammingISD.md supplies no single fixed SD instance."
+                "no single fixed SD instance is modeled."
             )
             problem = Problem("structural_key_recovery", {})
             route = reason
@@ -249,7 +222,10 @@ class HammingScheme:
                 n, k, w = p["n"], p["k1"] + p["k2"], p["w"]
                 formula = "(n,k1+k2,w) over Fq"
             problem = Problem("sd", {"n": n, "k": k, "w": w, "q": q}, log2_solutions=0)
-            route = f"HammingISD.md {goal}: {formula}; source parameters={p}"
+            label = "Key recovery" if key else (
+                "Message recovery from u" if scheme in COMPOSITE_MSG_SCHEMES else "Message recovery"
+            )
+            route = f"{label}: (n,k,w)={formula}"
             if doom == "auto" and scheme != "UVW-KEM":
                 codewords = key and scheme in ("BIKE_MLThre", "TRIKE")
                 if scheme == "Mito":
@@ -301,8 +277,6 @@ class HammingScheme:
                         "The target orbit is derived from the full public QC equations; "
                         "the NSS-HQC specification does not explicitly apply a DOOM discount.",
                     )
-                route += f"; {tags[0]}, full-orbit targets={targets}"
-                references += (DOOM_REFERENCE, _DOOM_REFERENCES[scheme])
             else:
                 assumptions += (
                     "Single target and one designated acceptable solution (log2_solutions=0); "
@@ -313,7 +287,6 @@ class HammingScheme:
                         "UVW-KEM has no documented public QC automorphism supplying free targets; "
                         "the hidden monomial transformation does not supply a DOOM orbit.",
                     )
-                route += "; single-target SD baseline"
             if key and not tags and scheme in ("BIKE_MLThre", "TRIKE"):
                 assumptions = (*assumptions, _KEY_ASSUMPTION)
             if not key and scheme in COMPOSITE_MSG_SCHEMES:

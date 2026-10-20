@@ -1,7 +1,7 @@
 """Reference tuples and algebra for the full composite message core.
 
-The reference tuples are recorded independently from local/path_audit/HQC.md,
-Mito.md, and QUBE.md, checked against the submitted reference parameters.
+The reference tuples are independently recorded and checked against the
+submitted reference parameters.
 Mito-1-E-256 uses the corrected ring length 32261, rather than code length 32256.
 """
 
@@ -56,7 +56,8 @@ def test_composite_reference_tuples(scheme, parameter_set, n, k, w, targets, doo
     assert attack.tags == (("doom:qcsd",) if doom == "auto" else ())
     assert any("unknown-message costs" in note for note in attack.assumptions)
     assert any("uncompressed core" in note for note in attack.assumptions)
-    assert any("local/HammingSchemes/" in ref for ref in attack.references)
+    assert any(ref.startswith(scheme) for ref in attack.references)
+    assert all("/" not in ref and "\\" not in ref for ref in attack.references)
 
 
 def _cyclic_product(a, b):
