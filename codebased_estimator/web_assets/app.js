@@ -5,7 +5,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const optionalText = (id, text) => { const element = $(id); if (element) element.textContent = text; };
 const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
 const number = (value, digits = 2) => Number.isFinite(value) ? value.toLocaleString("en-US", {minimumFractionDigits:digits, maximumFractionDigits:digits}) : "—";
-const human = (value) => ({key_recovery:"Key recovery",msg_recovery:"Message recovery",both:"Both recovery goals",computed:"Computed",not_requested:"Not selected",not_implemented:"Not implemented",not_applicable:"Not applicable",infeasible:"Infeasible",unavailable:"Unavailable",incomparable_units:"Different units",unsupported:"Unsupported",failed:"Failed"}[value] || String(value ?? "").replaceAll("_", " "));
+const human = (value) => ({key_recovery:"Key recovery",msg_recovery:"Message recovery",both:"Both recovery goals",computed:"Computed",classical:"Classical",quantum:"Quantum",not_requested:"Not selected",not_implemented:"Not implemented",not_applicable:"Not applicable",infeasible:"Infeasible",unavailable:"Unavailable",incomparable_units:"Different units",unsupported:"Unsupported",failed:"Failed"}[value] || String(value ?? "").replaceAll("_", " "));
 const unit = (value) => ({bit_operations:"bit operations",quantum_bit_operations:"quantum bit operations",bits:"bits",not_estimated:"not estimated"}[value] || value || "unspecified");
 const HISTORY_KEY = "codebased-estimator.history.v1";
 const JOB_KEY = "codebased-estimator.active-job.v1";
@@ -428,6 +428,34 @@ function batchMinimum(conclusion) {
   return `${number(best[0].estimate.time_log2)}<small>log₂(${escapeHTML(unit(best[0].estimate.time_unit))})</small><small>${best.map((winner) => `${escapeHTML(winner.estimate.algorithm)} · ${escapeHTML(winner.route_id || "default")}`).join("<br>")}</small>`;
 }
 
+function assumptionGroups(report) {
+  const route = [...new Set(report.instance.assumptions || [])];
+  const notes = new Map();
+  for (const result of report.results) {
+    for (const note of new Set(result.assumptions || [])) {
+      if (route.includes(note)) continue;
+      if (!notes.has(note)) notes.set(note, new Map());
+      const family = notes.get(note);
+      if (!family.has(result.model)) family.set(result.model, new Set());
+      family.get(result.model).add(result.algorithm);
+    }
+  }
+  const scoped = new Map();
+  for (const [note, families] of notes) {
+    const label = [...families].map(([family, names]) => `${human(family)}: ${[...names].join(", ")}`).join("; ");
+    if (!scoped.has(label)) scoped.set(label, []);
+    scoped.get(label).push(note);
+  }
+  return [...(route.length ? [{label:"Recovery route", items:route}] : []), ...[...scoped].map(([label,items]) => ({label,items}))];
+}
+
+function reportAssumptions(report) {
+  const list = (items) => `<ul>${items.map((line) => `<li>${escapeHTML(line)}</li>`).join("")}</ul>`;
+  const assumptions = assumptionGroups(report).map(({label,items}) => `<p><strong>${escapeHTML(label)}</strong></p>${list(items)}`).join("");
+  const references = [...new Set([...(report.instance.references || []),...report.results.flatMap((result) => result.references || [])])];
+  return assumptions + (references.length ? `<p><strong>References</strong></p>${list(references)}` : "");
+}
+
 function renderResults(record) {
   state.current = record;
   $("empty-results").hidden = true;
@@ -462,7 +490,7 @@ function renderResults(record) {
     return `<div class="chart-group ${first.model === "quantum" ? "quantum-chart" : ""}"><div class="chart-group-label"><span>${first.model === "quantum" ? "Quantum" : "Classical"}</span><span>${escapeHTML(unit(first.time_unit))}</span></div>${group.map(({report,result}) => `<div class="chart-row"><div class="chart-label">${escapeHTML(result.algorithm)}${record.reports.length > 1 ? `<small>${batch ? `${escapeHTML(report.instance.parameter_set)} · ` : ""}${escapeHTML(report.instance.route_id || "default")} · ${report.instance.goal === "key_recovery" ? "key" : "message"}</small>` : ""}</div><div class="chart-track"><div class="chart-bar" style="width:${width(result.time_log2)}%" title="${escapeHTML(`${result.algorithm}: ${number(result.time_log2)} log₂ ${unit(result.time_unit)}`)}"></div></div><div class="chart-number">${number(result.time_log2)}</div></div>`).join("")}<div class="chart-axis"><span>${number(minimum,0)}</span><span>${number((maximum+minimum)/2,0)}</span><span>${number(maximum,0)}</span></div></div>`;
   }).join("") : '<p class="chart-empty">No computed costs. See statuses below.</p>';
   $("results-body").innerHTML = rows.map(({report,result}) => `<tr><td><span class="row-family ${result.model === "quantum" ? "quantum-tag" : ""}">${result.model === "quantum" ? "Q" : "C"}</span>${escapeHTML(result.algorithm)}${isWinner(report,result) ? '<span class="best-marker">route min</span>' : ""}<small>${batch ? `${escapeHTML(report.instance.parameter_set)} · ` : ""}${escapeHTML(report.instance.route_id || "default")} · ${escapeHTML(human(report.instance.goal))}</small>${result.reason ? `<details class="row-reason"><summary>Details</summary><p>${escapeHTML(result.reason)}</p></details>` : ""}</td><td><span class="row-status ${result.status !== "computed" ? "unavailable" : ""}">${escapeHTML(human(result.status))}</span></td><td>${number(result.time_log2)}<small>${escapeHTML(unit(result.time_unit))}</small></td><td>${result.memory_unit === "not_estimated" ? "Not estimated" : number(result.memory_log2)}${result.memory_unit !== "not_estimated" ? `<small>${escapeHTML(unit(result.memory_unit))}</small>` : ""}</td></tr>`).join("");
-  $("tab-details").innerHTML = record.reports.map((report) => `<article class="detail-report"><h3>${escapeHTML(report.instance.name)}</h3><p>${escapeHTML(report.instance.route)}</p><div class="parameter-chips">${chips(report.instance.problem.parameters)}</div><details><summary>Assumptions &amp; references</summary><ul>${[...new Set([...(report.instance.assumptions || []),...(report.instance.references || []),...report.results.flatMap((result) => [...(result.assumptions || []),...(result.references || [])])])].map((line) => `<li>${escapeHTML(line)}</li>`).join("")}</ul></details><details><summary>Algorithm parameters &amp; model metadata</summary><pre>${escapeHTML(JSON.stringify(report.results,null,2))}</pre></details><details><summary>Full report JSON</summary><pre>${escapeHTML(JSON.stringify(report,null,2))}</pre></details></article>`).join("");
+  $("tab-details").innerHTML = record.reports.map((report) => `<article class="detail-report"><h3>${escapeHTML(report.instance.name)}</h3><p>${escapeHTML(report.instance.route)}</p><div class="parameter-chips">${chips(report.instance.problem.parameters)}</div><details><summary>Assumptions &amp; references</summary>${reportAssumptions(report)}</details><details><summary>Algorithm parameters &amp; model metadata</summary><pre>${escapeHTML(JSON.stringify(report.results,null,2))}</pre></details><details><summary>Full report JSON</summary><pre>${escapeHTML(JSON.stringify(report,null,2))}</pre></details></article>`).join("");
 }
 
 function renderLibrary() {

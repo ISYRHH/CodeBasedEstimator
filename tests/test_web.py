@@ -5,6 +5,7 @@ import http.client
 import json
 import threading
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -33,6 +34,10 @@ def custom_request(**changes):
         "options": {"classical_algorithms": ["Prange"], "quantum_algorithms": []},
         **changes,
     }
+
+
+def availability_for(data):
+    return algorithm_availability(*prepare_job(data))
 
 
 @contextmanager
@@ -82,6 +87,7 @@ def test_catalogue_and_route_preview_preserve_domain_provenance(tmp_path):
     with running_server(tmp_path) as server:
         status, data, _ = request(server, "GET", "/api/catalogue")
         assert status == 200
+        assert data["limits"]["job_seconds"] is None
         assert "Mito" in data["schemes"]
         assert data["algorithms"]["quantum"] == ["QPrange", "QSS", "QMMT+"]
         assert "Prange" in data["algorithm_families"]["binary"]
@@ -170,14 +176,12 @@ def test_availability_never_runs_parameter_optimization(monkeypatch):
                    "codebased_estimator.classical_doom.estimate_doom", "codebased_estimator.backend._seed_bounded_m4ri"):
         monkeypatch.setattr(target, forbidden)
     for scheme in catalogue()["schemes"]:
-        instances, options = prepare_job({"scope": "scheme", "scheme": scheme, "goal": "both"})
-        availability = algorithm_availability(instances, options)
+        availability = availability_for({"scope": "scheme", "scheme": scheme, "goal": "both"})
         assert not availability["quantum"]["QPrange"]["available"]
         assert any(item["available"] for item in availability["classical"].values())
     rank = custom_request()
     rank["instance"]["problem"] = {"kind": "rank_sd", "parameters": {"n": 40, "k": 20, "m": 10, "r": 3, "q": 2}}
-    instances, options = prepare_job(rank)
-    assert algorithm_availability(instances, options)["classical"]["GRS"]["available"]
+    assert availability_for(rank)["classical"]["GRS"]["available"]
 
 
 def test_custom_preflight_accepts_empty_selection_and_retains_validation(tmp_path):
@@ -217,12 +221,11 @@ def test_rejected_qcsd_constructor_never_reaches_doom_optimizer(monkeypatch):
     monkeypatch.setattr("codebased_estimator.backend._with_bjmm_depth3_candidate", forbidden)
     data = custom_request()
     data["instance"].update(tags=["doom:qcsd"], targets=4)
-    instances, options = prepare_job(data)
-    availability = algorithm_availability(instances, options)
+    availability = availability_for(data)
     for name in ("Prange", "Stern", "Dumer", "BJMM"):
         assert not availability["classical"][name]["available"]
-        assert availability["classical"][name]["reason"] == (
-            "The upstream estimator rejected this algorithm for these parameters.")
+        reason = availability["classical"][name]["reason"].lower()
+        assert "upstream" in reason and "reject" in reason
 
 
 @pytest.mark.parametrize("kind,parameters,expected_classical", [
@@ -232,8 +235,7 @@ def test_rejected_qcsd_constructor_never_reaches_doom_optimizer(monkeypatch):
 def test_availability_excludes_wrong_families_and_quantum(kind, parameters, expected_classical):
     data = custom_request()
     data["instance"]["problem"] = {"kind": kind, "parameters": parameters}
-    instances, options = prepare_job(data)
-    availability = algorithm_availability(instances, options)
+    availability = availability_for(data)
     supported = {name for name, item in availability["classical"].items() if item["available"]}
     if expected_classical is not None:
         assert supported == expected_classical
@@ -253,26 +255,22 @@ def test_mage_preflight_matches_explicit_default_and_block_solution_guards(solut
     data["instance"]["problem"] = {"kind": "sd", "parameters": {"n": 40, "k": 30, "w": 5},
                                     "log2_solutions": solution_count}
     data["instance"]["block_profile"] = block_profile
-    instances, options = prepare_job(data)
-    availability = algorithm_availability(instances, options)
+    availability = availability_for(data)
     assert not availability["classical"]["MAGE-Stern"]["available"]
     assert "solution" in availability["classical"]["MAGE-Stern"]["reason"]
     assert availability["classical"]["Prange"]["available"]
     data["instance"]["problem"]["log2_solutions"] = 0
-    instances, options = prepare_job(data)
-    assert algorithm_availability(instances, options)["classical"]["MAGE-Stern"]["available"]
+    assert availability_for(data)["classical"]["MAGE-Stern"]["available"]
 
 
 def test_preflight_rejects_unknown_structures_and_preserves_quantum_qcsd_fallback():
     data = custom_request()
     data["instance"].update(tags=["doom:qcsd"], targets=4)
-    instances, options = prepare_job(data)
-    availability = algorithm_availability(instances, options)
+    availability = availability_for(data)
     assert availability["quantum"]["QSS"]["available"]
     assert availability["classical"]["MAGE-Stern"]["available"]
     data["instance"]["structure"] = ["shared support"]
-    instances, options = prepare_job(data)
-    availability = algorithm_availability(instances, options)
+    availability = availability_for(data)
     assert not any(item["available"] for family in availability.values() for item in family.values())
 
 
@@ -282,15 +280,13 @@ def test_qccf_preflight_respects_quantum_profile_orbit_guard():
         "lengths": [20, 20], "weights": [1, 3], "target_permutations": [[0, 1], [1, 0]]})
     data["instance"]["problem"]["kind"] = "cfp"
     del data["instance"]["problem"]["log2_solutions"]
-    instances, options = prepare_job(data)
-    availability = algorithm_availability(instances, options)
+    availability = availability_for(data)
     assert not availability["quantum"]["QSS"]["available"]
     assert "block-weight profiles" in availability["quantum"]["QSS"]["reason"]
     assert availability["classical"]["Prange"]["available"]
     assert availability["classical"]["MAGE-Stern"]["available"]
     data["unbalanced"] = "none"
-    instances, options = prepare_job(data)
-    assert algorithm_availability(instances, options)["quantum"]["QSS"]["available"]
+    assert availability_for(data)["quantum"]["QSS"]["available"]
 
 
 def test_unsupported_scheme_goal_has_no_selectable_algorithms(tmp_path):
@@ -331,16 +327,39 @@ def test_cancellation_stops_process_and_releases_capacity(tmp_path):
     assert not manager._jobs[second["id"]]["process"].is_alive()
 
 
-@pytest.mark.parametrize("worker,timeout,reason", [
-    (_crashing_worker, 20, "exited unexpectedly"),
-    (_slow_worker, 0.15, "time limit"),
-])
-def test_failed_workers_and_time_limits_are_reported(tmp_path, worker, timeout, reason):
-    manager = JobManager(worker=worker, timeout=timeout)
+def test_failed_workers_are_reported(tmp_path):
+    manager = JobManager(worker=_crashing_worker)
     with running_server(tmp_path, manager) as server:
         _, started, _ = request(server, "POST", "/api/jobs", custom_request())
         job = wait_for_job(server, started["id"])
-        assert job["status"] == "failed" and reason in job["error"]
+        assert job["status"] == "failed" and "exited unexpectedly" in job["error"]
+
+
+def test_long_running_batch_can_finish_without_a_deadline(monkeypatch):
+    manager = JobManager()
+    reports = [{"name": "first route"}, {"name": "second route"}]
+    comparisons = [{"best_route": "second route"}]
+    receiver = Mock()
+    receiver.poll.side_effect = [False, True, False, True, True]
+    receiver.recv.side_effect = [
+        *({"type": "report", "report": report} for report in reports),
+        {"type": "complete", "comparisons": comparisons},
+    ]
+    process = Mock()
+    process.is_alive.return_value = True
+    stop = Mock()
+    monkeypatch.setattr(manager, "_stop_process", stop)
+    data = {"status": "running", "reports": [], "comparisons": [],
+            "progress": {"completed": 0, "total": 2}}
+    # Reproduce a job older than the former 30-minute cutoff without waiting.
+    job = {"data": data, "process": process, "receiver": receiver,
+           "started": time.monotonic() - 3601}
+    manager._monitor(job)
+    assert data["status"] == "completed" and "error" not in data
+    assert data["reports"] == reports and data["comparisons"] == comparisons
+    assert data["progress"] == {"completed": 2, "total": 2}
+    receiver.close.assert_called_once()
+    stop.assert_called_once_with(process)
 
 
 def test_completed_job_history_is_bounded():

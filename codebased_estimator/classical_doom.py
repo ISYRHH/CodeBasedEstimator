@@ -23,6 +23,7 @@ from functools import lru_cache
 from itertools import product
 from math import comb, floor, inf, isfinite, log2
 
+from .assumptions import BLOCK_OUTER, BLOCK_SOLUTIONS, CLASSICAL_COST, SINGLE_SYNDROME
 from .doom_bjmm import bjmm_terms
 from .models import AttackInstance, Estimate, Options
 
@@ -33,6 +34,20 @@ REFERENCES = (
     "https://eprint.iacr.org/2011/367 (Sendrier, Section 5, Eq. 8)",
     "https://eprint.iacr.org/2021/1634 (Esser--May--Zweydinger, Sections 2 and 5.1)",
 )
+
+
+def _doom_assumptions(*, profile=False):
+    assumptions = (
+        "DOOM uses a linear-union proxy for success probability; syndrome correlations are not modeled.",
+        CLASSICAL_COST,
+    )
+    if profile:
+        assumptions += (
+            BLOCK_OUTER,
+            BLOCK_SOLUTIONS,
+            "Only syndromes preserving block weights share a coordinate allocation.",
+        )
+    return assumptions
 
 
 @dataclass(frozen=True)
@@ -593,12 +608,12 @@ def _estimate_profile_doom(name, instance, options, baseline):
         metadata["gaussian_elimination_search"] = (
             "all nondominated CE block widths under the DOOM memory budget"
         )
-    assumptions = tuple(item for item in generic.assumptions
-                        if strategy == "generic_full_orbit" or
-                        not item.startswith("Selected unchanged single-target CE strategy")) + (
-        "Block-aware candidates optimize the exact hypergeometric outer probability before algorithm and batch selection; inner list and matrix costs are retained.",
-        "A single coordinate allocation is shared by profile-preserving targets; other block-weight permutations are omitted from that candidate, while the full-orbit generic strategy remains available.",
-    )
+    if strategy == "profile_preserving_batch":
+        assumptions = _doom_assumptions(profile=True)
+    elif strategy == "profile_single_target":
+        assumptions = single.assumptions + (SINGLE_SYNDROME,)
+    else:
+        assumptions = generic.assumptions
     return replace(selected, metadata=metadata, assumptions=assumptions,
                    references=tuple(dict.fromkeys(selected.references+REFERENCES)))
 
@@ -631,20 +646,12 @@ def estimate_doom(name: str, instance: AttackInstance, options: Options, baselin
                             if baseline.status == "computed" else None}
     metadata = {**baseline.metadata, "tags": list(instance.tags), "targets": instance.targets,
                 "effective_log2_solutions": solutions, "doom": doom}
-    assumptions = (
-        "Binary syndrome targets under one matrix; usable target count is supplied, not inferred from QC structure.",
-        "Random-label DOOM success proxy min(1, targets_used * solutions_per_syndrome * P); target correlations are not modeled.",
-        "CE-compatible integer hash-list costs with per-target rounding, vector-to-bit conversion, and dense transforms of additional syndromes; BJMM final merge is streamed.",
-    )
-    if name == "BJMM":
-        assumptions += ("BJMM explicit DOOM uses depth two; its unchanged CE depth-two/depth-three baseline remains a candidate.",)
     if not take_point:
-        assumptions += ("Selected unchanged single-target CE strategy; additional syndromes are not processed.",)
-        return replace(baseline, metadata=metadata, assumptions=assumptions,
+        return replace(baseline, metadata=metadata, assumptions=baseline.assumptions + (SINGLE_SYNDROME,),
                        references=tuple(dict.fromkeys(baseline.references+REFERENCES)))
     metadata["cost_breakdown"] = point.details
     metadata["gaussian_elimination_search"] = "all nondominated CE block widths under the DOOM memory budget"
     return replace(baseline, status="computed", time_log2=point.time_log2,
                    memory_log2=point.memory_log2, parameters=point.parameters, reason="",
-                   assumptions=assumptions, metadata=metadata,
+                   assumptions=_doom_assumptions(), metadata=metadata,
                    references=tuple(dict.fromkeys(baseline.references+REFERENCES)))

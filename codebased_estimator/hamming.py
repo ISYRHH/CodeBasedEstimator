@@ -8,6 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 
+from .assumptions import SINGLE_SYNDROME
 from .hamming_parameters import HAMMING_PARAMETERS
 from .models import AttackInstance, Problem
 from .mito_parity import MitoKeyParity
@@ -26,21 +27,18 @@ UNBALANCED_MODES = ("auto", "none")
 COMPOSITE_MSG_SCHEMES = ("HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE")
 
 _ASSUMPTIONS = (
-    "Generic ISD cost proxy for the documented recovery route; not a whole-scheme security estimate.",
-    "Unbalanced outer selection uses known block weights where supported; inner structured lists, "
-    "cross-block support relations and structure-dependent rank probabilities are not modeled.",
-    "Recovery postprocessing, candidate verification and their success probabilities are not costed.",
+    "Decoding cost only; scheme-level recovery, validation and support correlations are not modeled.",
 )
 _KEY_ASSUMPTION = (
-    "For this preliminary key route, ordinary SD cost is used as a proxy for finding the designated nonzero low-weight secret. "
-    "This is not a dedicated homogeneous codeword-finding model or a proof that any low-weight word recovers the key."
+    "Single-target SD proxy for the designated nonzero secret; homogeneous codeword search is not modeled."
 )
-_MSG_ASSUMPTIONS = (
-    "Message-route comparison ignores ciphertext truncation and unknown-message costs: "
-    "no message guessing, message-code dimension penalty or message-elimination cost is charged.",
-    "Composite estimates use the full uncompressed core and treat v-Encode(m) as available for free. "
-    "Compression/quantization residuals are not modeled; this is a simplified cost proxy, "
-    "not a reduction from the actual unknown-message ciphertext.",
+_COMPOSITE_MSG_ASSUMPTIONS = (
+    "Assumes v-Encode(m) is available at no cost; this is not a full unknown-message recovery reduction.",
+    "Uses the uncompressed core; truncation and compression residuals are not modeled.",
+)
+_SYNDROME_ORBIT = (
+    "The supplied orbit is assumed to give distinct syndromes of one matrix, "
+    "with solutions mapping back to the original decoding instance."
 )
 
 
@@ -91,28 +89,20 @@ def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
         "target_action": "(s, parity_y) -> (P_g s, D_g parity_y)",
         "scope": "Exact augmented matrix rank; heuristic random-SD cost, not a dedicated structured P attack.",
     }
+    assumptions = (*baseline.assumptions,
+        "Uses the augmented rank in a random-code model; sparse parity rows and exact block weights are not modeled.",
+        "Added rank need not provide independent information under fixed-weight constraints.",
+    )
+    if baseline.tags == ("doom:qcsd",):
+        assumptions += (
+            "The target orbit must transform the full augmented syndrome, including its parity labels.",
+        )
     return replace(
         baseline, name=f"{entry['parameter_set']}/key_recovery/parity", route_id="parity",
         problem=Problem("sd", proxy["effective_parameters"], log2_solutions=0),
         route="Mito P parity rank model: (n,k,w)=(2dr,dr-d,sum(wx_i)+sum(wy_i))",
         cost_proxy=proxy, block_profile=None,
-        assumptions=(*baseline.assumptions,
-            "The augmented binary matrix has exact rank d*r+d. Generic ISD costs approximate it by "
-            "a random full-rank SD matrix; sparse parity-row effects on pivots and lists are not modeled.",
-            "x and y are independently sampled with their exact block weights and pairwise disjoint "
-            "supports within each tuple (S^D), not uniformly from a parity slice R[b]. "
-            "Block parities are retained in the source system; exact weights and disjointness are relaxed in the cost proxy.",
-            "E*A_h=B_h*E with (B_h)_{ij}=E(h)_{i xor j}; E*x=wx mod 2 follows from "
-            "the public syndrome and E*y=wy mod 2, so appending x parity adds no further rank.",
-            "All 2*d*r binary coordinates and total weight are preserved. There is no extra d-bit, "
-            "collapse or CombGap discount; ambient rank gain need not equal independent information on a fixed-weight domain.",
-            "DOOM transforms the entire syndrome (s,parity_y) to (P_g*s,D_g*parity_y); "
-            "dyadic shifts permute parity labels. The full d*r orbit is a proxy assumption, not guaranteed distinct targets.",
-            "This generic cost model of P supplies neither a search/decision reduction "
-            "nor an optimality proof for generic ISD and excludes square/folding/lifting attacks.",
-            "Unbalanced outer selection is not combined with this parity-rank proxy: "
-            "the additional parity rows and exact block weights require a joint rank-conditioned model.",
-        ),
+        assumptions=assumptions,
     )
 
 
@@ -128,37 +118,23 @@ def _composite_message(entry: dict, *, doom: str) -> AttackInstance:
         n, k = (2 * p["d"] + 1) * r, p["d"] * r
         w = sum(p["wr"]) + sum(p["wt"]) + p["we"]
         formula = "((2d+1)r,dr,sum(wr_i)+sum(wt_i)+we)"
-        equation = "u=a+A_h*t; v-Encode(m)=B_s*t+e, B_s=[Cir(s_0)...Cir(s_(d-1))]"
     elif scheme == "QUBE":
         n, k, w = 4 * r, 2 * r, 2 * p["wf"] + p["wg"] + p["we"]
         formula = "(4r,2r,2wf+wg+we)"
-        equation = "u=g+h1*f1+h2*f2; v-Encode(m)=s1*f1+s2*f2+e"
     else:
         n, k = 3 * r, r
         w = (p["wr1"] + p["wr2"] if scheme == "NSS-HQC" else 2 * p["wr"]) + p["we"]
         formula = "(3r,r,wr1+wr2+we)" if scheme == "NSS-HQC" else "(3r,r,2wr+we)"
-        equation = "u=r1+h*r2; v-Encode(m)=s*r2+e"
-    assumptions = (*_ASSUMPTIONS, *entry.get("notes", ()), *_MSG_ASSUMPTIONS,
-                   f"Joint core equations: {equation}.",
-                   "Identity blocks for the first ephemeral vector and e give full row rank; "
-                   "one designated acceptable solution per syndrome (log2_solutions=0). "
-                   "Fixed block weights enter supported outer probabilities; parity and disjoint supports "
-                   "receive no additional discount.")
-    if scheme == "Mito":
-        assumptions += (
-            "Only truncation is removed: Pr still publishes one ring component, with one r-bit e. "
-            "The joint matrix has (d+1)r rows and (2d+1)r columns. Dyadic shifts do not preserve "
-            "the published second component, so only the cyclic orbit of size r is used, not d*r.",
-        )
+    assumptions = (*_ASSUMPTIONS, *_COMPOSITE_MSG_ASSUMPTIONS)
     targets, tags = (r, ("doom:qcsd",)) if doom == "auto" else (1, ())
     if doom == "auto":
-        assumptions += (
-            f"QCSD joint-core proxy: simultaneous cyclic shifts of every r-bit block preserve the "
-            f"same public matrix and total weight. Full usable orbit assumed: M={r}; duplicate "
-            "syndromes and orbit correlations are not modeled. Inverse shifts recover the original candidate.",
-        )
+        assumptions += (_SYNDROME_ORBIT,)
+        if scheme == "Mito":
+            assumptions += (
+                "Only simultaneous cyclic shifts are used; dyadic shifts do not preserve the published component.",
+            )
     else:
-        assumptions += ("Single target; no DOOM or multiple-solution speedup.",)
+        assumptions += (SINGLE_SYNDROME,)
     return AttackInstance(
         name=f"{parameter_set}/msg_recovery/composite", route_id="composite",
         scheme=scheme, parameter_set=parameter_set, goal="msg_recovery",
@@ -209,7 +185,7 @@ class HammingScheme:
         p = entry["parameters"]
         key = goal == "key_recovery"
         scheme = self.scheme
-        assumptions = (*_ASSUMPTIONS, *entry.get("notes", ()))
+        assumptions = _ASSUMPTIONS
         targets, tags = 1, ()
         references = tuple(entry["references"])
 
@@ -222,7 +198,7 @@ class HammingScheme:
             )
             problem = Problem("structural_key_recovery", {})
             route = reason
-            assumptions = (*assumptions, reason)
+            assumptions = ()
         else:
             q = p.get("q", 2)
             if scheme == "BIKE_MLThre":
@@ -274,64 +250,25 @@ class HammingScheme:
                 tags = ("doom:qccf" if codewords else "doom:qcsd",)
                 if codewords:
                     problem = Problem("cfp", dict(problem.parameters))
-                    assumptions += (
-                        "QCCF cost proxy: targets counts distinct acceptable nonzero cyclic shifts of the secret "
-                        "under one zero syndrome, not distinct syndromes; no extra target discount is applied.",
-                        "An orbit member is assumed to yield a usable equivalent key after recovery/verification; "
-                        "arbitrary low-weight codewords need not do so.",
-                    )
+                    if scheme == "BIKE_MLThre":
+                        orbit = "Invertible h0 gives distinct nonzero cyclic shifts yielding equivalent keys"
+                    else:
+                        orbit = "The supplied orbit is assumed to give distinct nonzero codewords yielding equivalent keys"
+                    assumptions += (orbit + "; other low-weight codewords may not recover a key.",)
                 else:
+                    assumptions += (_SYNDROME_ORBIT,)
+                if scheme == "QCTM":
                     assumptions += (
-                        "QCSD cost proxy: targets counts distinct syndromes under one public matrix; "
-                        "log2_solutions=0 designates one acceptable solution per syndrome. "
-                        "Inverse automorphism maps a recovered target solution back to the original equation.",
-                    )
-                if scheme == "BIKE_MLThre" and key:
-                    assumptions += (
-                        f"The planted secret has exactly r={targets} distinct cyclic shifts: h0 is invertible "
-                        "in F2[X]/(X^r-1). Their public ratio and block weights are preserved; "
-                        "orbit correlations are not modeled.",
-                    )
-                else:
-                    assumptions += (
-                        f"Full usable orbit assumed: M={targets}; parameter snapshots do not contain concrete "
-                        "syndromes/keys to check stabilizers or duplicate targets. Shorter orbits require a smaller "
-                        "targets value in an explicit AttackInstance. Orbit correlations are not modeled.",
-                    )
-                if scheme == "Mito":
-                    assumptions += (
-                        "Mito uses the full C_r x (C_2)^ell action of size d*r, d=2^ell; "
-                        "dyadic shifts permute block-weight labels and preserve total weight. "
-                        "The QCSD backend is a syndrome-target proxy for this QDSD orbit, not a folded attack.",
-                    )
-                elif scheme == "QCTM":
-                    assumptions += (
-                        "QCTM uses automorphism order ell=19, not n or n/ell; syndrome transforms must retain "
-                        "the entire hybrid parity-check space, including the non-circulant tail rows.",
-                    )
-                elif scheme == "NSS-HQC":
-                    assumptions += (
-                        "The target orbit is derived from the full public QC equations; "
-                        "the NSS-HQC specification does not explicitly apply a DOOM discount.",
+                        "The target orbit must preserve the full hybrid parity-check space, "
+                        "including non-circulant tail rows.",
                     )
             else:
-                assumptions += (
-                    "Single target and one designated acceptable solution (log2_solutions=0); "
-                    "no DOOM, QC orbit or multiple-solution speedup.",
-                )
-                if scheme == "UVW-KEM":
-                    assumptions += (
-                        "UVW-KEM has no documented public QC automorphism supplying free targets; "
-                        "the hidden monomial transformation does not supply a DOOM orbit.",
-                    )
+                assumptions += (SINGLE_SYNDROME,)
             if key and not tags and scheme in ("BIKE_MLThre", "TRIKE"):
                 assumptions = (*assumptions, _KEY_ASSUMPTION)
             if not key and scheme in COMPOSITE_MSG_SCHEMES:
-                assumptions += _MSG_ASSUMPTIONS
                 assumptions += (
-                    "This message route uses only the complete u equation to recover ephemeral randomness; "
-                    "public decoding/decompression and candidate verification remain necessary. "
-                    "The orbit count is not asserted for the truncated/compressed joint ciphertext problem.",
+                    "Uses the complete u equation to recover ephemeral randomness; v and the unknown message are not inputs.",
                 )
 
         composite = not key and scheme in COMPOSITE_MSG_SCHEMES
@@ -349,11 +286,16 @@ class HammingScheme:
             instances.append(_composite_message(entry, doom=doom))
         if mito_key:
             instances.append(_mito_parity_key(entry, instances[0]))
-        if unbalanced == "none":
-            instances = [replace(i, block_profile=None, assumptions=(*i.assumptions,
-                         "Unbalanced outer selection disabled; only total weight enters the estimator."))
-                         for i in instances]
-        return instances
+        configured = []
+        for instance in instances:
+            profile = instance.block_profile if unbalanced == "auto" else None
+            notes = instance.assumptions
+            if scheme == "TriQ-KEM" and not key:
+                notes += (
+                    "TriQ-KEM's bounded-density sampler is approximated by fixed-weight sampling; window constraints and retry limits are not modeled.",
+                )
+            configured.append(replace(instance, block_profile=profile, assumptions=notes))
+        return configured
 
 
 def hamming_instances(*, schemes=None, parameter_sets=None, goal="both", doom="auto",

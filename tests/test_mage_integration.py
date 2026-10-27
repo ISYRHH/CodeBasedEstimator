@@ -4,12 +4,11 @@ import csv
 from dataclasses import replace
 import io
 import json
-import sys
 from types import SimpleNamespace
 
 import pytest
 
-from codebased_estimator import AttackInstance, Options, Problem, estimate
+from codebased_estimator import AttackInstance, Options, Problem, estimate, mage_search
 from codebased_estimator.__main__ import _csv_results, main
 
 
@@ -42,7 +41,7 @@ def native_search(monkeypatch):
         state.calls.append((args, kwargs))
         return state.cost
 
-    monkeypatch.setitem(sys.modules, "codebased_estimator.mage_search", SimpleNamespace(optimize=optimize))
+    monkeypatch.setattr(mage_search, "optimize", optimize)
     return state
 
 
@@ -132,17 +131,21 @@ def test_valid_qcsd_kind_and_sd_alias_share_native_dispatch(kind, native_search)
     assert native_search.calls[0][1]["targets"] == 4
 
 
-def test_none_solution_count_keeps_ce_semantics(native_search):
-    instance = attack(problem=Problem("sd", {"n": 40, "k": 20, "w": 10}))
+@pytest.mark.parametrize("weight,status", [
+    pytest.param(10, "not_implemented", id="multiple-expected-solutions"),
+    pytest.param(4, "computed", id="one-expected-solution"),
+])
+def test_none_solution_count_keeps_ce_semantics(weight, status, native_search):
+    instance = attack(problem=Problem("sd", {"n": 40, "k": 20, "w": weight}))
     row, = estimate(instance, options=mage_options()).results
-    assert row.status == "not_implemented"
-    assert "log2_solutions=0" in row.reason
-    assert not native_search.calls
-    instance = attack(problem=Problem("sd", {"n": 40, "k": 20, "w": 4}))
-    row, = estimate(instance, options=mage_options()).results
-    assert row.status == "computed"
-    assert row.metadata["effective_log2_solutions"] == 0
-    assert "CE default" in row.metadata["solution_count_policy"]
+    assert row.status == status
+    if status == "computed":
+        assert native_search.calls
+        assert row.metadata["effective_log2_solutions"] == 0
+        assert "CE default" in row.metadata["solution_count_policy"]
+    else:
+        assert "log2_solutions=0" in row.reason
+        assert not native_search.calls
 
 
 @pytest.mark.parametrize("native_time,targets", [(10.0, 1), (100.0, 8)])

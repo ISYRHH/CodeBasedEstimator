@@ -9,8 +9,8 @@ const vm = require("node:vm");
 const source = readFileSync(join(__dirname, "../codebased_estimator/web_assets/app.js"), "utf8");
 assert.match(source, /\binitialize\(\);\s*$/);
 
-// Only model the DOM operations used by input preparation and selection. The
-// production event handlers/functions run unchanged; startup/network are inert.
+// Minimal DOM for state, selection and report regressions. Production handlers
+// run unchanged; startup is disabled and network responses are mocked.
 function workspace() {
   const elements = [];
   const ids = new Map();
@@ -107,7 +107,6 @@ function workspace() {
   goal.value = "msg_recovery";
   get("param-q").value = 2;
   get("unbalanced").value = "auto";
-  get("more-classical-algorithms").parentElement = element("more-algorithms", "details", configuration);
   const document = {getElementById:get, querySelectorAll:query,
     addEventListener:body.addEventListener.bind(body), createElement:(tag) => element("", tag)};
   const context = vm.createContext({document, structuredClone, URLSearchParams,
@@ -144,9 +143,8 @@ function catalogueWorkspace() {
 }
 
 test("library loading keeps the visible source controls enabled despite a hidden workspace", () => {
-  const ui = workspace();
-  ui.context.catalogueFixture = catalogue;
-  ui.evaluate("state.catalogue = catalogueFixture; view('catalogue'); setMode('custom')");
+  const ui = catalogueWorkspace();
+  ui.evaluate("view('catalogue'); setMode('custom')");
   assert.equal(ui.get("view-workspace").hidden, true);
   assert.equal(ui.get("scheme").disabled, true);
   assert.equal(ui.get("param-n").disabled, false);
@@ -211,10 +209,9 @@ test("invalid imported models fail atomically instead of being normalized", () =
 });
 
 test("catalogue and custom field order select only the matching classical algorithm family", () => {
-  const ui = workspace();
-  ui.context.catalogueFixture = catalogue;
+  const ui = catalogueWorkspace();
   ui.get("scheme").value = "Qary";
-  ui.evaluate("state.catalogue = catalogueFixture; populateSets('Qary-1')");
+  ui.evaluate("populateSets('Qary-1')");
   assert.equal(ui.evaluate("algorithmFamily()"), "qary");
   assert.match(ui.get("classical-algorithms").innerHTML, /LeeBrickell/);
   assert.doesNotMatch(ui.get("classical-algorithms").innerHTML, /Dumer|MAGE-Stern/);
@@ -386,4 +383,29 @@ test("CSV export retains units, missing quantum memory, effective targets and es
   assert.equal(rows[1].memory_log2, "");
   assert.equal(rows[1].memory_unit, "not_estimated");
   assert.equal(rows[1].is_route_minimum, "true");
+});
+
+test("assumptions retain algorithm scope while deduplicating shared notes and separating references", () => {
+  const ui = workspace();
+  ui.context.reportFixture = {
+    instance:{assumptions:["A usable orbit is supplied.","A usable orbit is supplied."],references:["Parameter source"]},
+    results:[
+      {model:"classical",algorithm:"Prange",assumptions:["A usable orbit is supplied.","Random-matrix cost proxy.","Multiple syndromes are processed."],references:["Model source"]},
+      {model:"classical",algorithm:"Stern",assumptions:["Random-matrix cost proxy.","Multiple syndromes are processed."],references:["Model source"]},
+      {model:"quantum",algorithm:"QSS",assumptions:["Random-matrix cost proxy.","Only one syndrome is processed.","Costs < gate counts are not claimed."],references:[]},
+    ],
+  };
+  const groups = ui.plain("assumptionGroups(reportFixture)");
+  assert.deepEqual(groups, [
+    {label:"Recovery route",items:["A usable orbit is supplied."]},
+    {label:"Classical: Prange, Stern; Quantum: QSS",items:["Random-matrix cost proxy."]},
+    {label:"Classical: Prange, Stern",items:["Multiple syndromes are processed."]},
+    {label:"Quantum: QSS",items:["Only one syndrome is processed.","Costs < gate counts are not claimed."]},
+  ]);
+  const html = ui.evaluate("reportAssumptions(reportFixture)");
+  for (const note of ["A usable orbit is supplied.","Random-matrix cost proxy.","Model source"]) {
+    assert.equal(html.split(note).length - 1, 1);
+  }
+  assert.match(html, /<strong>References<\/strong>[\s\S]*Parameter source[\s\S]*Model source/);
+  assert.match(html, /Costs &lt; gate counts/);
 });

@@ -1,4 +1,4 @@
-"""Local browser interface and bounded, cancellable estimator jobs.
+"""Local browser interface with cancellable background estimator jobs.
 
 Run with ``python -m codebased_estimator.web``.  Each evaluation runs in a
 separate spawned process, leaving HTTP requests and cancellation responsive.
@@ -18,7 +18,6 @@ import mimetypes
 import multiprocessing
 from pathlib import Path
 import threading
-import time
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 import uuid
@@ -33,7 +32,6 @@ from .models import AttackInstance, Options, Problem, QUANTUM_ALGORITHMS
 MAX_BODY_BYTES = 64 * 1024
 MAX_ACTIVE_JOBS = 2
 MAX_STORED_JOBS = 16
-MAX_JOB_SECONDS = 30 * 60
 MAX_CUSTOM_DIMENSION = 1_000_000
 ASSET_DIRECTORY = Path(__file__).with_name("web_assets")
 TERMINAL_STATUSES = frozenset(("completed", "failed", "cancelled"))
@@ -85,7 +83,7 @@ def catalogue() -> dict[str, Any]:
             "goal": "key_recovery", "doom": "auto", "unbalanced": "auto",
             "options": deepcopy(DEFAULT_OPTIONS),
         },
-        "limits": {"active_jobs": MAX_ACTIVE_JOBS, "job_seconds": MAX_JOB_SECONDS,
+        "limits": {"active_jobs": MAX_ACTIVE_JOBS, "job_seconds": None,
                    "body_bytes": MAX_BODY_BYTES, "custom_dimension": MAX_CUSTOM_DIMENSION},
     }
 
@@ -283,11 +281,9 @@ class JobManager:
     """Bounded in-memory job store; only validated domain objects reach workers."""
 
     def __init__(self, *, max_active: int = MAX_ACTIVE_JOBS,
-                 max_stored: int = MAX_STORED_JOBS, timeout: float = MAX_JOB_SECONDS,
-                 worker=_evaluate_job):
+                 max_stored: int = MAX_STORED_JOBS, worker=_evaluate_job):
         self.max_active = max_active
         self.max_stored = max_stored
-        self.timeout = timeout
         self.worker = worker
         self._context = multiprocessing.get_context("spawn")
         self._lock = threading.RLock()
@@ -314,8 +310,7 @@ class JobManager:
                                             daemon=True, name=f"estimator-{job_id[:8]}")
             data = {"id": job_id, "status": "queued", "progress": {
                 "completed": 0, "total": len(instances)}, "reports": [], "comparisons": []}
-            job = {"data": data, "process": process, "receiver": receiver,
-                   "started": time.monotonic()}
+            job = {"data": data, "process": process, "receiver": receiver}
             self._jobs[job_id] = job
             try:
                 process.start()
@@ -338,9 +333,6 @@ class JobManager:
             while True:
                 with self._lock:
                     if job["data"]["status"] in TERMINAL_STATUSES:
-                        break
-                    if time.monotonic() - job["started"] > self.timeout:
-                        job["data"].update(status="failed", error="Evaluation exceeded the web time limit")
                         break
                 if receiver.poll(0.1):
                     try:
