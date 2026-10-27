@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from codebased_estimator import AttackInstance, Estimate, Options, Problem, estimate
+from codebased_estimator.doom_fallback import single_target_fallback
 from codebased_estimator.matrix_costs import MATRIX_PROFILES
 
 
@@ -31,13 +32,9 @@ def test_qcsd_fallback_matches_single_target_cost_parameters_and_profile(
     row, = report.results
     baseline, = estimate(replace(original, tags=(), targets=1), options=options).results
     assert report.instance == original
-    assert row.status == baseline.status == "computed"
-    assert row.time_log2 == baseline.time_log2
-    assert row.memory_log2 == baseline.memory_log2
-    assert row.parameters == baseline.parameters
-    assert row.time_unit == baseline.time_unit
-    assert row.memory_unit == baseline.memory_unit
-    assert row.references == baseline.references
+    assert row.status == "computed"
+    assert replace(row, reason=baseline.reason, assumptions=baseline.assumptions,
+                   metadata=baseline.metadata) == baseline
     assert set(baseline.assumptions).issubset(row.assumptions)
     for key, value in baseline.metadata.items():
         if key not in ("tags", "targets"):
@@ -52,7 +49,6 @@ def test_qcsd_fallback_matches_single_target_cost_parameters_and_profile(
     assert doom["available_targets"] == targets
     assert doom["active_targets"] == 1 and doom["applied"] is False
     assert doom["fallback_reason"] in row.reason
-    assert "without DOOM" in row.reason
     assert report.conclusions["quantum"].best == (row,)
     json.dumps(report.to_dict(), allow_nan=False)
 
@@ -130,3 +126,23 @@ def test_custom_model_owns_its_unsupported_doom_result():
     assert received == [original]
     assert report.results == [unavailable]
     assert report.conclusions["quantum"].status == "unavailable"
+
+
+@pytest.mark.parametrize("family", ["classical", "quantum"])
+@pytest.mark.parametrize("status", ["computed", "infeasible", "not_implemented"])
+def test_fallback_annotation_preserves_the_baseline_contract(family, status):
+    baseline = Estimate("test algorithm", family, status,
+                        time_log2=20 if status == "computed" else None,
+                        memory_log2=10 if status == "computed" else None,
+                        assumptions=("Four acceptable solutions per syndrome.",),
+                        metadata={"effective_log2_solutions": 2})
+    result = single_target_fallback(baseline, attack(solutions=2), "QCSD model unavailable.")
+    assert replace(result, reason=baseline.reason, assumptions=baseline.assumptions,
+                   metadata=baseline.metadata) == baseline
+    assert result.assumptions[:-1] == baseline.assumptions
+    assert result.metadata["effective_log2_solutions"] == 2
+    assert result.metadata["effective_targets"] == 1
+    assert result.metadata["doom"]["applied"] is False
+    disclosure = result.assumptions[-1].lower()
+    assert "syndrome" in disclosure and "doom" in disclosure
+    assert "one solution" not in disclosure

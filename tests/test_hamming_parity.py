@@ -53,6 +53,21 @@ def test_all_mito_key_routes_preserve_source_and_add_only_independent_parities(p
     assert AttackInstance.from_dict(json.loads(json.dumps(asdict(parity), allow_nan=False))) == parity
 
 
+@pytest.mark.parametrize("doom", ["auto", "none"])
+def test_parity_assumptions_describe_the_selected_target_model(doom):
+    parity = HammingScheme("Mito").instances("Mito-1-128", "key_recovery", doom=doom)[1]
+    notes = " ".join(parity.assumptions)
+    assert ("full augmented syndrome" in notes and "parity labels" in notes) == (doom == "auto")
+    assert ("orbit is assumed" in notes) == (doom == "auto")
+    assert any("augmented rank" in note and "random-code model" in note
+               for note in parity.assumptions)
+    assert any("not modeled" in note and "parity rows" in note and "block weights" in note
+               for note in parity.assumptions)
+    assert "support correlations" in notes
+    assert any("need not" in note and "independent information" in note and "fixed-weight" in note
+               for note in parity.assumptions)
+
+
 @pytest.fixture
 def small_mito(monkeypatch):
     monkeypatch.setattr("codebased_estimator.hamming.HAMMING_PARAMETERS", [{

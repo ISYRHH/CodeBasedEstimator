@@ -52,7 +52,6 @@ def test_explicit_solution_count_is_passed_before_quantum_optimization(monkeypat
         assert row.metadata["effective_log2_solutions"] == solutions
         assert row.metadata["outer_probability_model"] == OUTER_PROBABILITY_MODEL
         assert row.metadata["codeword_finding"] is False
-        assert "explicit log2 count" in row.metadata["solution_count_policy"]
     assert report.instance == attack
 
 
@@ -83,7 +82,6 @@ def test_qccf_matches_nonzero_core_proxy_and_retains_original_context(kind, targ
     assert report.instance.problem.parameters == {"n": 24, "k": 12, "w": 4}
     assert report.instance.problem.log2_solutions is None
     assert report.instance.targets == targets
-    assert "self-collision" in " ".join(row.assumptions)
 
 
 @pytest.mark.parametrize("algorithm", ["QSS", "QMMT+"])
@@ -96,6 +94,7 @@ def test_qccf_cannot_fall_back_to_direct_zero_codeword(algorithm):
 
 
 @pytest.mark.parametrize("overrides,status", [
+    ({"algorithm": "QPrange"}, "not_implemented"),
     ({"tags": ()}, "not_applicable"),
     ({"tags": ("doom:qccf", "unmodeled")}, "not_implemented"),
     ({"structure": ("block weights",)}, "not_implemented"),
@@ -121,12 +120,6 @@ def test_qccf_does_not_discard_unsupported_context(monkeypatch, overrides, statu
 def test_qccf_validates_decoding_parameters(parameters):
     with pytest.raises(ValueError):
         qccf_report(parameters=parameters)
-
-
-def test_qccf_does_not_implement_qprange():
-    row, = qccf_report(algorithm="QPrange").results
-    assert row.status == "not_implemented"
-    assert row.time_log2 is None
 
 
 def test_qccf_large_candidate_count_remains_finite_and_preserved():

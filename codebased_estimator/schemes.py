@@ -33,6 +33,5 @@ class DemoScheme:
             name=f"toy-{parameter_set}/{goal}", scheme="synthetic-demo",
             parameter_set=parameter_set, goal=goal, problem=problem,
             route="synthetic decoding subproblem; no scheme recovery reduction claimed",
-            assumptions=("Synthetic parameters; not an NGCC security estimate.",
-                         "Postprocessing and recovery success have not been modelled."),
+            assumptions=("Synthetic parameters; scheme-level recovery and validation are not modeled.",),
         )]

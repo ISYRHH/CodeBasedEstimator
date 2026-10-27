@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from math import isfinite, log2
 
+from .assumptions import BLOCK_OUTER, BLOCK_SOLUTIONS
 from .models import AttackInstance, Estimate, Options, Problem, QUANTUM_ALGORITHMS
 from .doom_fallback import single_target_fallback
 from .list_costs import LIST_COST_PROFILE
@@ -140,13 +141,12 @@ class QuantumModel:
                              "per-matrix runtime or security lower bound"],
         }
         assumptions = (
-            "Bernstein-type outer amplitude amplification; only support-search repetition receives a square-root speedup.",
-            "Random full-row-rank binary H independent of a planted support; ensemble rank probability, not a guarantee for a given H.",
-            "Existing platform aggregate coherent preparation, elimination, predicate and reverse-cleanup normalization; not a gate-level budget.",
-            "Mean marked fraction is used as a heuristic input; this is not mean quantum runtime or a security lower bound.",
+            "Random-code rank model; abstract coherent quantum access is assumed.",
         )
         if solutions:
-            assumptions += ("The common rank event stays outside the existing independent-solution union proxy; no second multiplicity discount.",)
+            assumptions += ("Solution successes are independent conditional on the common rank event.",)
+        if options.quantum_matrix_profile == M4RI_MATRIX_PROFILE and cost.matrix.get("block_size", 0):
+            assumptions += ("M4RI assumes coherent row-table lookup and aggregate cleanup costs.",)
         return Estimate(
             algorithm="QPrange", model=self.name, status="computed",
             time_log2=cost.time_log2, memory_log2=None,
@@ -233,43 +233,23 @@ class QuantumModel:
                     "log2 vector_operations; null core means zero"
                 )
         assumptions = (
-            ("Generic binary nonzero-codeword finding through an outer-probability QCCF proxy."
-             if codeword_finding else
-             "Generic unstructured binary single-target, single-solution decoding." if solutions == 0 else
-             "Generic unstructured binary single-target decoding with an explicit solution count."),
-            "Ka17 abstract quantum access with ordered lists and average-load cost budgets; "
-            "not a gate-level estimate or a security lower bound.",
-            "Random-code ensemble survival proxy; not a per-matrix or mean-runtime upper bound.",
+            "Random-code rank model; abstract coherent quantum access is assumed.",
         )
+        uses_lists = cost is not None and cost.parameters.get("branch") in ("walk", "full_list")
+        if uses_lists:
+            assumptions += ("Ordered-list operations use average-load costs.",)
+            if cost.parameters.get("b", 0) > 0:
+                assumptions += ("Representation survival uses a random-code proxy.",)
         if instance.block_profile is not None:
-            assumptions += (
-                "Known block weights modify the outer information-weight event during parameter optimization. "
-                "Coordinates are shuffled uniformly within the selected information region, preserving the "
-                "conditional Ka17 half/quarter split probability and the inner list costs.",
-                "Block-conditioned success is applied before representation survival and the solution union; "
-                "the common random-rank proxy and setup cost are unchanged. Additional structural attacks "
-                "and block-dependent matrix-rank effects are not modeled.",
-                "An explicit solution count assumes that every counted solution has the supplied block-weight profile.",
-            )
-        if solutions > 0 or codeword_finding:
-            assumptions += (
-                "Independent-solution outer union proxy rho*(1-(1-P*sigma)^M), applied during "
-                "parameter optimization; the inner model retains one surviving solution and receives no extra multiplicity factor.",
-            )
+            assumptions += (BLOCK_OUTER, BLOCK_SOLUTIONS)
+        if solutions > 0:
+            assumptions += ("Solution successes are independent conditional on the common rank event.",)
         if codeword_finding:
             assumptions += (
-                "targets counts distinct acceptable nonzero weight-w codewords, including usable orbit members; "
-                "orbit size and independence are not inferred and correlations are not modeled.",
-                "The p=0 direct branch is excluded because it yields the zero codeword; "
-                "zero-syndrome-specific enumeration and self-collision costs are not fully modeled.",
+                "Zero-syndrome enumeration and self-collision costs are not fully modeled.",
             )
-        if profile == M4RI_MATRIX_PROFILE:
-            assumptions += (
-                "Partial M4RI uses abstract coherent row-table lookup and data-dependent pivot selection; "
-                "pivot choices and row-operation history are retained until reverse cleanup.",
-                "Panel, table, and cleanup work use the declared aggregate vector-operation "
-                "normalization; table record counts are not a quantum memory estimate.",
-            )
+        if profile == M4RI_MATRIX_PROFILE and cost is not None and metadata["matrix"].get("block_size", 0):
+            assumptions += ("M4RI assumes coherent row-table lookup and aggregate cleanup costs.",)
         return Estimate(
             algorithm=name,
             model=self.name,

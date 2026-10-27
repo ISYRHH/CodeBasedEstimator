@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 
+from .assumptions import SINGLE_SYNDROME
 from .models import AttackInstance, Estimate
 
 
@@ -10,9 +11,7 @@ def single_target_fallback(baseline: Estimate, instance: AttackInstance, reason:
     return replace(
         baseline,
         reason=f"{reason} {baseline.reason}".strip(),
-        assumptions=(*baseline.assumptions,
-                     "Only one of the available QCSD syndromes is used; the per-syndrome "
-                     "solution count is unchanged and no DOOM speedup is applied."),
+        assumptions=(*baseline.assumptions, SINGLE_SYNDROME),
         metadata={
             **baseline.metadata,
             "tags": list(instance.tags),

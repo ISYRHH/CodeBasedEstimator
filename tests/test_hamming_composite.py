@@ -54,10 +54,36 @@ def test_composite_reference_tuples(scheme, parameter_set, n, k, w, targets, doo
     assert attack.problem.log2_solutions == 0
     assert attack.targets == (targets if doom == "auto" else 1)
     assert attack.tags == (("doom:qcsd",) if doom == "auto" else ())
-    assert any("unknown-message costs" in note for note in attack.assumptions)
-    assert any("uncompressed core" in note for note in attack.assumptions)
     assert any(ref.startswith(scheme) for ref in attack.references)
     assert all("/" not in ref and "\\" not in ref for ref in attack.references)
+
+
+@pytest.mark.parametrize("scheme,parameter_set", [
+    ("HARE", "HARE-128"),
+    ("NSS-HQC", "NSS-HQC-128"),
+    ("TriQ-KEM", "TriQ-KEM-128"),
+    ("Mito", "Mito-1-128"),
+    ("QUBE", "QUBE-128"),
+])
+def test_unknown_message_assumptions_apply_only_to_the_composite_route(scheme, parameter_set):
+    u_only, composite = HammingScheme(scheme).instances(parameter_set, "msg_recovery")
+    u_notes, composite_notes = " ".join(u_only.assumptions), " ".join(composite.assumptions)
+    assert "v-Encode(m)" not in u_notes
+    assert "complete u equation" in u_notes and "ephemeral randomness" in u_notes
+    assert any("v-Encode(m)" in note and "available" in note and "no cost" in note
+               for note in composite.assumptions)
+    assert "uncompressed core" in composite_notes
+    assert "truncation" in composite_notes and "compression residuals" in composite_notes
+    assert "not a full unknown-message recovery reduction" in composite_notes
+
+
+def test_single_target_mito_composite_does_not_claim_a_doom_orbit_is_used():
+    composite = HammingScheme("Mito").instances("Mito-1-128", "msg_recovery", doom="none")[1]
+    notes = " ".join(composite.assumptions)
+    assert composite.targets == 1 and composite.tags == ()
+    assert "no DOOM" in notes
+    assert not any("orbit" in note.lower() and ("assumed" in note or "is used" in note)
+                   for note in composite.assumptions)
 
 
 def _cyclic_product(a, b):
