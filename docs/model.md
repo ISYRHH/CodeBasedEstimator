@@ -7,7 +7,7 @@
 | 后端 | 支持范围 | 时间／内存单位 |
 |---|---|---|
 | 经典 | CE 2.1.1 的二元 SD、多元 SD、Rank SD，以及本地 MAGE-Stern | `bit_operations`／`bits` |
-| 量子 | 二元 SD 的 QSS、QMMT+，以及不带块画像的通用 QPrange | `quantum_bit_operations`／未估计 |
+| 量子 | 二元 SD 的 QPrange、QSS、QMMT+，均可使用已有块画像 | `quantum_bit_operations`／未估计 |
 
 输出均为 $\log_2$。经典采用有限参数、位复杂度和常数内存访问计价；`--memory-bound` 仅约束经典。量子采用抽象相干访问预算，不是完整电路门数或设备运行时间。未知标签及额外 `structure` 不会被通用后端忽略；`cost_proxy` 只记录路线近似的来源。
 

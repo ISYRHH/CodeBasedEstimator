@@ -48,8 +48,6 @@ class QuantumModel:
             reason = f"{name} currently declares only binary syndrome-decoding routes."
         elif name == "QPrange" and codeword_finding:
             reason = "QPrange's invertible-tail direct branch yields only the zero word for a zero syndrome; nonzero-codeword search is not implemented."
-        elif name == "QPrange" and instance.block_profile is not None:
-            reason = "QPrange block-profile support is a separate incremental extension; the supplied profile is not ignored."
         elif (codeword_finding and instance.block_profile is not None
               and instance.block_profile.preserving_targets(instance.targets) != instance.targets):
             reason = (
@@ -115,8 +113,11 @@ class QuantumModel:
 
         p = instance.problem.parameters
         solutions = instance.problem.log2_solutions or 0.0
+        profile_options = ({"block_profile": instance.block_profile}
+                           if instance.block_profile is not None else {})
         cost = evaluate_qprange(p["n"], p["k"], p["w"],
-            matrix_profile=options.quantum_matrix_profile, log2_solutions=solutions)
+            matrix_profile=options.quantum_matrix_profile, log2_solutions=solutions,
+            **profile_options)
         metadata = {
             "tags": list(instance.tags), "targets": instance.targets,
             "structure": list(instance.structure), "cost_model": PRANGE_MODEL,
@@ -147,6 +148,15 @@ class QuantumModel:
         )
         if solutions:
             assumptions += ("The common rank event stays outside the existing independent-solution union proxy; no second multiplicity discount.",)
+        if instance.block_profile is not None:
+            metadata["unbalanced"] = dict(cost.unbalanced)
+            metadata["not_included"] = [
+                "block-dependent structured-matrix rank" if item == "block profiles or structured-matrix rank"
+                else item for item in metadata["not_included"]]
+            assumptions += (
+                "Known block weights use the existing finite outer event before amplification and the solution union; no second block gain or rank factor is added.",
+                "The shared aggregate preparation, elimination and predicate budget is retained; block-dependent rank and circuit prices are not modeled. Every counted solution must satisfy the supplied block-weight profile.",
+            )
         return Estimate(
             algorithm="QPrange", model=self.name, status="computed",
             time_log2=cost.time_log2, memory_log2=None,

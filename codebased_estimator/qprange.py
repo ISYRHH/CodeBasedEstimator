@@ -1,16 +1,18 @@
 """QPrange at the existing quantum model's fixed direct point.
 
-This thin adapter adds neither a cost kernel nor a circuit model.  Block
-profiles are deliberately left to the next incremental change.
+This thin adapter adds neither a cost kernel nor a circuit model. Optional
+block profiles use the existing native outer-probability model unchanged.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 from math import log2
+from typing import Optional
 
 from .matrix_costs import DEFAULT_MATRIX_PROFILE, matrix_budget
 from .quantum_costs import QuantumCost, evaluate_parameters
+from .unbalanced import BlockProfile
 
 
 COST_MODEL = "bernstein-prange-shared-budget-v1"
@@ -18,15 +20,17 @@ COST_MODEL = "bernstein-prange-shared-budget-v1"
 
 def evaluate_qprange(n: int, k: int, w: int, *,
                      matrix_profile: str = DEFAULT_MATRIX_PROFILE,
-                     log2_solutions: float = 0.0) -> QuantumCost:
+                     log2_solutions: float = 0.0,
+                     block_profile: Optional[BlockProfile] = None) -> QuantumCost:
     """Reuse the validated QSS ell=p=0 budget exactly, without its search.
 
     Existing ensemble-rank and independent-solution probability proxies are
     retained, not upgraded to a guarantee for a structured matrix or runtime.
     """
+    profile_options = {"block_profile": block_profile} if block_profile is not None else {}
     cost = evaluate_parameters(n, k, w, "QSS", ell=0, p=0,
                               matrix_profile=matrix_profile,
-                              log2_solutions=log2_solutions)
+                              log2_solutions=log2_solutions, **profile_options)
     if cost is None:
         raise RuntimeError("validated QPrange direct point was unexpectedly infeasible")
     budget = matrix_budget(n, k, 0, matrix_profile)

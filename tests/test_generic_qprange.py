@@ -5,7 +5,7 @@ from math import comb, fsum, log, log2, log1p
 
 import pytest
 
-from codebased_estimator import AttackInstance, BlockProfile, Options, Problem, estimate
+from codebased_estimator import AttackInstance, Options, Problem, estimate
 from codebased_estimator.matrix_costs import MATRIX_PROFILES, matrix_budget
 from codebased_estimator.qprange import evaluate_qprange
 from codebased_estimator.quantum_costs import evaluate_parameters
@@ -72,8 +72,6 @@ def test_public_and_qcsd_fallback_keep_direct_point(profile, solutions, monkeypa
 
 @pytest.mark.parametrize("changes", [
     {"targets": 2}, {"tags": ("unknown",)}, {"structure": ("truncated",)},
-    {"block_profile": BlockProfile((6, 6), (1, 3))},
-    {"block_profile": BlockProfile((6, 6), (1, 3)), "tags": ("doom:qcsd",), "targets": 16},
     {"problem": Problem("cfp", {"n": 12, "k": 6, "w": 4}),
      "targets": 8, "tags": ("doom:qccf",)},
     {"problem": Problem("sd", {"n": 12, "k": 6, "w": 4, "q": 3}, 0)},
