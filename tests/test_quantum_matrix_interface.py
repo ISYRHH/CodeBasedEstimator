@@ -3,7 +3,7 @@
 import csv
 import io
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from math import log2
 
 import pytest
@@ -29,9 +29,15 @@ def options(profile=DEFAULT_MATRIX_PROFILE, **changes):
                    quantum_matrix_profile=profile, **changes)
 
 
+def write_instance(tmp_path, instance):
+    path = tmp_path / "attack.json"
+    path.write_text(json.dumps(asdict(instance)), encoding="utf-8")
+    return path
+
+
 @pytest.mark.parametrize("profile", MATRIX_PROFILES)
 def test_options_round_trip_selects_only_supported_profiles(profile):
-    report = Report(attack(), options(profile), (), {})
+    report = Report(attack(), options(profile), {}, [])
     assert json.loads(json.dumps(report.to_dict()))["options"]["quantum_matrix_profile"] == profile
     assert Options().quantum_matrix_profile == DEFAULT_MATRIX_PROFILE
 
@@ -70,7 +76,6 @@ def test_profile_is_routed_to_optimizer_and_identified_in_public_json(monkeypatc
     assert report.conclusions["quantum"].best == (row,)
     if profile == DEFAULT_MATRIX_PROFILE:
         assert "matrix" not in row.metadata
-        assert len(row.assumptions) == 3
     else:
         budget = matrix_budget(24, 12, point.parameters["ell"], profile)
         assert row.metadata["matrix"] == point.matrix
@@ -78,46 +83,37 @@ def test_profile_is_routed_to_optimizer_and_identified_in_public_json(monkeypatc
         assert row.metadata["matrix"]["log2_G_total"] == log2(budget.total)
         assert row.metadata["matrix"]["search"]["complete"] is True
         assert "h" not in row.parameters and "block_size" not in row.parameters
-        assumptions = " ".join(row.assumptions)
-        for disclosure in ("coherent", "pivot", "history", "cleanup", "not a quantum memory"):
-            assert disclosure in assumptions
     json.dumps(report.to_dict(), allow_nan=False)
 
 
-@pytest.mark.parametrize("changes", [
-    {"tags": ("doom:qcsd", "unmodeled")}, {"targets": 2}, {"structure": ("quasi-cyclic",)},
-    {"problem": Problem("sd", {"n": 24, "k": 12, "w": 4, "q": 3}, 0)},
+@pytest.mark.parametrize("algorithm,changes,status", [
+    ("QSS", {"tags": ("doom:qcsd", "unmodeled")}, "not_implemented"),
+    ("QSS", {"targets": 2}, "not_implemented"),
+    ("QSS", {"structure": ("quasi-cyclic",)}, "not_implemented"),
+    ("QSS", {"problem": Problem("sd", {"n": 24, "k": 12, "w": 4, "q": 3}, 0)}, "not_applicable"),
+    ("QPrange", {}, "not_implemented"),
 ])
-def test_optional_profile_does_not_bypass_quantum_applicability(monkeypatch, changes):
+def test_optional_profile_does_not_bypass_quantum_applicability(monkeypatch, algorithm, changes, status):
     def forbidden(*args, **kwargs):
         pytest.fail("unsupported contexts must not reach the optimizer")
 
     monkeypatch.setattr("codebased_estimator.quantum.optimize", forbidden)
-    row, = estimate(attack(**changes), options=options(M4RI_MATRIX_PROFILE)).results
-    assert row.status in ("not_implemented", "not_applicable")
+    settings = replace(options(M4RI_MATRIX_PROFILE), quantum_algorithms=(algorithm,))
+    row, = estimate(attack(**changes), options=settings).results
+    assert row.status == status
     assert row.time_log2 is None and "matrix" not in row.metadata
     assert row.metadata["matrix_profile"] == M4RI_MATRIX_PROFILE
-
-
-def test_optional_profile_does_not_implement_qprange():
-    settings = Options(classical_algorithms=(), quantum_algorithms=("QPrange",),
-                       quantum_matrix_profile=M4RI_MATRIX_PROFILE)
-    row, = estimate(attack(), options=settings).results
-    assert row.status == "not_implemented" and row.time_log2 is None
 
 
 @pytest.mark.parametrize("command", ["estimate", "demo", "hamming"])
 def test_all_cli_commands_forward_profile_selection(monkeypatch, tmp_path, capsys, command):
     instance = attack()
-    input_path = tmp_path / "attack.json"
-    input_path.write_text(json.dumps({"name": instance.name, "goal": instance.goal,
-        "problem": {"kind": "sd", "parameters": instance.problem.parameters,
-                    "log2_solutions": 0}}))
+    input_path = write_instance(tmp_path, instance)
     received = []
 
     def capture(instance, *, options):
         received.append(options)
-        return Report(instance, options, (), {})
+        return Report(instance, options, {}, [])
 
     monkeypatch.setattr("codebased_estimator.__main__.estimate", capture)
     monkeypatch.setattr("codebased_estimator.__main__.hamming_instances", lambda **kwargs: [instance])
@@ -131,10 +127,8 @@ def test_all_cli_commands_forward_profile_selection(monkeypatch, tmp_path, capsy
 @pytest.mark.parametrize("profile", MATRIX_PROFILES)
 @pytest.mark.parametrize("algorithm", ["QSS", "QMMT+"])
 def test_cli_profiles_serialize_actual_search_results_and_replay(tmp_path, capsys, profile, algorithm):
-    input_path = tmp_path / "attack.json"
-    input_path.write_text(json.dumps({"name": "small", "goal": "msg_recovery",
-        "problem": {"kind": "sd", "parameters": {"n": 12, "k": 6, "w": 2},
-                    "log2_solutions": 0}}))
+    instance = attack(name="small", problem=Problem("sd", {"n": 12, "k": 6, "w": 2}, 0))
+    input_path = write_instance(tmp_path, instance)
     argv = ["estimate", str(input_path), "--classical-algorithms", "--quantum-algorithms", algorithm]
     if profile != DEFAULT_MATRIX_PROFILE:
         argv += ["--quantum-matrix-profile", profile]

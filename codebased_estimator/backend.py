@@ -12,8 +12,15 @@ import os
 from pathlib import Path
 import subprocess
 
+from .assumptions import BLOCK_OUTER, BLOCK_SOLUTIONS, CLASSICAL_COST
 from .models import AttackInstance, Estimate, Options, Problem
 from .doom_fallback import single_target_fallback
+
+
+_SQRT_SYNDROMES = (
+    "Empirical sqrt(M) time discount for M syndromes; syndrome correlations and shared list costs are not modeled.",
+    CLASSICAL_COST,
+)
 
 
 def _ce_outer_event(algorithm, parameters):
@@ -215,6 +222,13 @@ def _json_value(value):
     raise TypeError(f"Unsupported upstream result type: {type(value).__name__}")
 
 
+def _profile_cost_assumptions(metadata):
+    """Describe block conditioning only when the returned cost actually uses it."""
+    if not metadata.get("unbalanced", {}).get("applied", False):
+        return ()
+    return BLOCK_OUTER, BLOCK_SOLUTIONS
+
+
 def _ce_bjmm_depth3(instance: AttackInstance, options: Options) -> Estimate:
     """Optimize a fresh CE depth-three child with the ordinary SD conventions.
 
@@ -352,16 +366,7 @@ def _with_bjmm_depth3_candidate(instance: AttackInstance, options: Options,
             "search": search,
         }
         details["doom"]["profile_preserving_targets"] = preserving
-    assumptions = (
-        "CE BJMM depth three is independently optimized under the supplied per-syndrome solution count and memory bound.",
-        "QCSD applies an empirical sqrt(M) time-speedup approximation to this depth-three CE cost; parameters and memory are unchanged.",
-        "Target correlations and algorithm-specific depth-three multi-target list costs are not modeled.",
-        "Explicit depth-two DOOM and the unchanged CE baseline remain separate candidates; no additional discount is applied to either.",
-    )
-    if profile is not None:
-        assumptions += (
-            "The profile candidate uses the existing block-outer-probability hook before CE optimization and only profile-preserving targets; the full generic orbit is evaluated separately with the same solution count.",
-        )
+    assumptions = _SQRT_SYNDROMES + _profile_cost_assumptions(details)
     return replace(raw, time_log2=time, assumptions=assumptions,
                    references=explicit.references, metadata=_json_value(details))
 
@@ -609,6 +614,9 @@ class ClassicalModel:
                 "active_targets": cost.parameters.get("targets_used", instance.targets) if cost else None,
                 "postprocessing_speedup_applied": False,
             }
+        # The profile search can itself choose a uniform first block. Describe
+        # the returned probability model, not merely the winning search branch.
+        profile_selected = bool(cost and cost.details.get("unbalanced", {}).get("selected_strategy") == "block_profile")
         if codeword_finding:
             details.update({
                 "codeword_finding": True,
@@ -617,7 +625,7 @@ class ClassicalModel:
                 "available_codewords": instance.targets,
                 "codeword_sampling_model": (
                     "block_profile_first_transition_proxy"
-                    if profile_comparison and profile_comparison["selected_strategy"] == "block_profile"
+                    if profile_selected
                     else "uniform_weight_support_proxy"
                 ),
                 "zero_syndrome_cost_model": "single_syndrome_ce_proxy_including_representative_overhead",
@@ -632,45 +640,25 @@ class ClassicalModel:
                     "postprocessing_speedup_applied": False,
                 },
             })
-        probability_assumptions = (
-            "QCCF uses a uniform-weight-support codeword proxy for one zero syndrome. "
-            "The single-word recursion is not an exact rank-conditioned codeword distribution.",
-            "Whole-tree failures for the supplied nonzero codewords are assumed mutually independent; "
-            "success is 1-(1-S_cw)^M. Codeword and QC-orbit correlations are not derived from M.",
-            "All M codewords enter only the outer probability before tree optimization. "
-            "Single-syndrome CE costs are retained, including representative overhead that "
-            "a zero-syndrome implementation could omit; no M-fold lists or target discount are applied.",
-            "p>=1 and 2*p-delta>=1 exclude the zero information vector and, with a full-rank "
-            "information set, the zero codeword. The two lists use disjoint information coordinates.",
-        ) if codeword_finding else (
-            "Binary random-code SD with one acceptable solution per syndrome.",
-            "Whole-tree failures for distinct targets are assumed mutually independent; "
-            "success is 1-(1-S)^u for single-target tree success S. Independent errors alone "
-            "do not establish this assumption for a shared randomized tree.",
-        )
-        assumptions = probability_assumptions + (
-            "Complete tree executions are charged without early stopping, with independent "
-            "randomized retries until success.",
-            "CE-compatible constant-cost memory access, n-bit vector operations and list storage; "
-            "finite MAGE-Stern branching probabilities and partial elimination are modeled locally.",
-            "Generator partial elimination costs n*k*b bit operations for b pivots; the CE baseline "
-            "charges n*k per represented syndrome per leaf. Full-vector lists, representative storage "
-            "and parity-check-to-generator conversion storage are charged.",
-            "The bounded parameter search returns the best evaluated point, not a proof of global optimality.",
-        )
-        if instance.tags == ("doom:qcsd",):
-            assumptions += (
-                "QCSD syndrome targets are usable under the model's random-error branching assumptions; "
-                "correlations between cyclic shifts are not modeled and no separate sqrt(targets) discount is applied.",
+        if codeword_finding:
+            sampling = "conditioned on block weights" if profile_selected else "with uniform weight supports"
+            assumptions = (
+                f"QCCF uses a proxy for nonzero codewords {sampling}; rank conditioning is not modeled.",
             )
-        if profile is not None:
+            active = cost.parameters.get("codewords", instance.targets) if cost else instance.targets
+            candidates = "codewords"
+        else:
+            assumptions = ()
+            active = cost.parameters.get("targets_used", instance.targets) if cost else instance.targets
+            candidates = "syndromes"
+        if active > 1:
             assumptions += (
-                "The block-weight candidate chooses the first pivot block with fixed per-block quotas, "
-                "then uniformly shuffles all remaining coordinates. Its exact first-weight distribution "
-                "enters the full branching recursion before branch unions; deeper block structure is not used.",
-                "Only targets whose block permutation preserves the supplied weights share that quota strategy. "
-                "The original full-orbit uniform candidate is retained; different profile classes are not "
-                "assigned separate cost-free optimized allocations. Rank and target independence proxies remain unchanged.",
+                f"Whole-tree failures for distinct {candidates} are independent; shared-tree and QC-orbit correlations are not modeled.",
+            )
+        assumptions += (CLASSICAL_COST, "Full-tree attempts and independent retries are assumed.")
+        if profile_selected:
+            assumptions += (
+                f"Only {candidates} preserving block weights share a first-pivot allocation; remaining coordinates are shuffled uniformly.",
             )
         return Estimate(
             algorithm=name, model=self.name,
@@ -761,12 +749,7 @@ class ClassicalModel:
                                        (generic.status != "computed" or
                                         restricted.time_log2 < generic.time_log2))
                     selected_result = restricted if take_restricted else generic
-                    selected_assumptions = selected_result.assumptions
-                    if take_restricted:
-                        selected_assumptions = tuple(
-                            item for item in selected_assumptions if not item.startswith("CE receives nsolutions=")
-                        ) + ("The profile candidate uses log2(active_codewords) for its profile-preserving codewords; the full supplied codeword orbit remains a separate generic candidate.",)
-                    return replace(selected_result, assumptions=selected_assumptions, metadata={
+                    return replace(selected_result, metadata={
                         **selected_result.metadata, "targets": instance.targets,
                         "solution_count_policy": ("profile-preserving active codewords: log2(active_codewords)"
                                                   if take_restricted else selected_result.metadata.get("solution_count_policy")),
@@ -802,13 +785,9 @@ class ClassicalModel:
             return replace(
                 result,
                 assumptions=(
-                    "QCCF is estimated by CE's generic binary SD multiple-solution cost proxy; "
-                    "zero-syndrome-specific enumeration and self-collisions are not modeled.",
-                    "targets counts distinct acceptable nonzero weight-w codewords, including "
-                    "usable orbit members; orbit size and independence are not inferred.",
-                    "CE receives nsolutions=log2(targets) before optimization, replacing its "
-                    "default solution count; no additional DOOM time discount is applied.",
-                ) + (result.assumptions if instance.block_profile is not None else ()),
+                    CLASSICAL_COST,
+                    "QCCF uses the SD solution-count proxy for nonzero codewords; zero-syndrome effects and codeword correlations are not modeled.",
+                ) + _profile_cost_assumptions(result.metadata),
                 metadata={
                     **result.metadata,
                     "tags": list(instance.tags),
@@ -864,13 +843,7 @@ class ClassicalModel:
             approximate = replace(
                 baseline,
                 time_log2=adjusted_time,
-                assumptions=(
-                    "Generic unstructured binary decoding; upstream classical cost model.",
-                    "QCSD uses a sqrt(M) time-speedup approximation for usable syndrome "
-                    "targets under one matrix; algorithm parameters and memory are unchanged.",
-                    "This approximation does not model target correlations or "
-                    "algorithm-specific multi-target list costs.",
-                ) + (baseline.assumptions if instance.block_profile is not None else ()),
+                assumptions=_SQRT_SYNDROMES + _profile_cost_assumptions(baseline.metadata),
                 metadata={
                     **baseline.metadata,
                     "tags": list(instance.tags),
@@ -1032,11 +1005,8 @@ class ClassicalModel:
             memory_log2=memory if math.isfinite(memory) else None,
             parameters=optimized,
             reason=reason,
-            assumptions=(("Exact finite block-weight outer selection with uniform shuffling inside each selected region; CE inner list, representation, matrix-rank, and projection cost proxies are retained.",
-                          "The supplied solution count counts acceptable solutions with this block profile; the generic comparison uses the same count.",
-                          "Algorithm and block-allocation searches return the best evaluated strategy, not a global optimality proof.")
-                         if outer_details is not None else
-                         ("Generic unstructured single-target decoding; upstream classical cost model.",)),
+            assumptions=(CLASSICAL_COST,)
+                        + _profile_cost_assumptions(details),
             metadata=_json_value(details),
         )
         if (generic_baseline is not None and generic_baseline.status == "computed"

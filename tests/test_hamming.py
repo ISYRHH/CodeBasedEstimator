@@ -116,7 +116,6 @@ def test_every_submission_instance_has_the_reference_decoding_tuple(scheme, para
         assert attack.structure == ()
         assert any(ref.startswith(scheme) for ref in attack.references)
         assert all("/" not in ref and "\\" not in ref for ref in attack.references)
-        assert any("Unbalanced" in note for note in attack.assumptions)
         if k is None:
             assert attack.problem.kind == "structural_key_recovery"
             assert attack.problem.parameters == {}
@@ -156,6 +155,34 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert copied["references"]
     attacks = hamming_instances()
     assert len(attacks) == len({attack.name for attack in attacks}) == 117
+
+
+@pytest.mark.parametrize("doom", ["auto", "none"])
+@pytest.mark.parametrize("unbalanced", ["auto", "none"])
+def test_route_assumptions_leave_algorithm_weight_strategy_to_results(doom, unbalanced):
+    for attack in hamming_instances(doom=doom, unbalanced=unbalanced):
+        notes = " ".join(attack.assumptions)
+        if attack.problem.kind == "structural_key_recovery":
+            assert not attack.assumptions
+            assert attack.route
+        else:
+            assert "scheme-level recovery" in notes and "not modeled" in notes
+            assert "support correlations" in notes
+            assert "outer success probability" not in notes
+        if unbalanced == "none" or attack.route_id == "parity":
+            assert attack.block_profile is None
+
+
+def test_source_notes_stay_in_the_catalogue_and_sampler_limits_are_route_specific():
+    catalogue = hamming_catalogue()
+    source_notes = {row["parameter_set"]: row.get("notes", []) for row in catalogue}
+    assert any("Legacy compatibility" in note for note in source_notes["BIKE_MLThre-192"])
+    for attack in hamming_instances():
+        assert not set(attack.assumptions).intersection(source_notes[attack.parameter_set])
+        density_notes = [note for note in attack.assumptions if "bounded-density" in note]
+        assert bool(density_notes) == (attack.scheme == "TriQ-KEM" and attack.goal == "msg_recovery")
+        if density_notes:
+            assert "not modeled" in density_notes[0]
 
 
 def test_batch_filters_goals_and_removes_duplicate_scheme_selections():

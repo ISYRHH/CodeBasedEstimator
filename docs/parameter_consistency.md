@@ -1,24 +1,14 @@
-# Hamming 参数确认
+# Hamming 参数说明
+
+参数值、版本及兼容配置备注统一保存在 [hamming_parameters.py](../codebased_estimator/hamming_parameters.py)。网页 **Parameters** 或 `python -m codebased_estimator hamming --list` 可查看完整目录；恢复路线见[模型说明](model.md#内置-hamming-方案的-doom-映射)。
 
 ## TRIKE v1.6
 
-参数采用 TRIKE 规范 v1.6，内置于 [hamming_parameters.py](../codebased_estimator/hamming_parameters.py)。
-
-| 参数集 | `r` | `w` | `t` | `d = w/3` |
-|---|---:|---:|---:|---:|
-| TRIKE-1 | 9437 | 81 | 201 | 27 |
-| TRIKE-3 | 19181 | 123 | 319 | 41 |
-| TRIKE-5 | 32987 | 165 | 429 | 55 |
-| TRIKE-7 | 62981 | 249 | 659 | 83 |
-| TRIKE-9 | 103043 | 333 | 877 | 111 |
-
-总密钥重量 `w=3d`，三个密钥块各重 `d`，`t` 为三个误差块的总重量。估计器采用密钥恢复 `(n,k,w)=(3r,2r,w)`、消息恢复 `(3r,r,t)` 和 `M=r` 的 DOOM 目标数。
-
-v1.6 不再包含 TRIKE-2，旧调用需选择 v1.6 参数集。TRIKE-3 属于 NIST level 3 参数集；v1.6 的 ICCS 实例为 TRIKE-1/5/7/9。
+采用规范 v1.6 的 TRIKE-1/3/5/7/9，不包含 TRIKE-2。总密钥重量 `w=3d`，三个密钥块各重 `d`，`t` 为误差总重量。TRIKE-3 为 NIST level 3 参数集；v1.6 的 ICCS 实例提供 TRIKE-1/5/7/9。
 
 ## Mito 和 QUBE
 
-Mito 的 9 组参数、QUBE 的 5 组参数（含 QUBE-192）均按提交规范和参考实现核对。采用值见 [hamming_parameters.py](../codebased_estimator/hamming_parameters.py)。
+目录包含 Mito 的 9 组参数和 QUBE 的 5 组参数（含 QUBE-192），按提交规范和参考实现核对。
 
 | 字段 | 含义 |
 |---|---|

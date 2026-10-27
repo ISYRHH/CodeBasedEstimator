@@ -14,6 +14,10 @@ test = ["pytest>=7"]
 
 [project.scripts]
 codebased-estimator = "codebased_estimator.__main__:main"
+codebased-estimator-web = "codebased_estimator.web:main"
+
+[tool.setuptools.package-data]
+codebased_estimator = ["web_assets/*"]
 
 [tool.setuptools.packages.find]
 include = ["codebased_estimator*"]
