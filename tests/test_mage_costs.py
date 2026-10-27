@@ -152,12 +152,20 @@ def test_fixed_parameters_replay_and_json_serialization():
     json.dumps(asdict(point), allow_nan=False)
 
 
-def test_probability_matches_existing_ce_stern_finite_terms():
-    from codebased_estimator.classical_doom import _simple_terms
+def test_terminal_event_is_independent_of_ce_stern_projection_kernel(monkeypatch):
+    import codebased_estimator.classical_doom as doom
+    import codebased_estimator.mage_costs as mage
 
+    # CE Stern now uses a separate outer event and integer projections;
+    # MAGE must retain the original full terminal event and expected lists.
+    monkeypatch.setattr(doom, "_simple_terms", lambda *a, **kw: pytest.fail("CE kernel reused"))
+    mage._list_logs.cache_clear()
     point = evaluate_parameters(41, 21, 5, ell=3, p=2, delta=1)
-    ce = _simple_terms(41, 21, 5, "Stern", {"l": 3, "p_left": 2, "p_right": 1})
-    assert point.details["log2_single_target_success_probability"] == pytest.approx(ce["log2_probability"])
+    probability = comb(10, 2)*comb(11, 1)*comb(17, 2)/comb(41, 5)
+    assert point.details["log2_single_target_success_probability"] == pytest.approx(log2(probability))
+    left, right, collisions, terminal = mage._list_logs(41, 21, 5, 3, 2, 1)
+    assert (left, right, collisions, terminal) == pytest.approx(
+        (log2(45), log2(11), log2(45*11/8), log2(probability)))
 
 
 def test_many_targets_do_not_saturate_at_union_bound():

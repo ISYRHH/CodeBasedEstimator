@@ -46,6 +46,12 @@ class QuantumModel:
         elif problem.kind != "sd" or problem.parameters.get("q") != 2:
             status = "not_applicable"
             reason = f"{name} currently declares only binary syndrome-decoding routes."
+        elif (codeword_finding and instance.block_profile is not None
+              and instance.block_profile.preserving_targets(instance.targets) != instance.targets):
+            reason = (
+                f"{name} has no QCCF union model for targets with different block-weight profiles; "
+                "one profile cannot be assigned to every target."
+            )
         elif "doom:qcsd" in instance.tags:
             if instance.tags == ("doom:qcsd",) and not instance.structure:
                 return self._estimate_without_doom(name, instance, options)
@@ -110,6 +116,8 @@ class QuantumModel:
             optimizer_options["log2_solutions"] = solutions
         if codeword_finding:
             optimizer_options["codeword_finding"] = True
+        if instance.block_profile is not None:
+            optimizer_options["block_profile"] = instance.block_profile
         cost = optimize(p["n"], p["k"], p["w"], name, **optimizer_options)
         metadata = {
             "tags": list(instance.tags),
@@ -154,6 +162,8 @@ class QuantumModel:
             }
         if cost is not None:
             metadata.update(cost_breakdown=cost.details, search=cost.search)
+            if instance.block_profile is not None:
+                metadata["unbalanced"] = dict(cost.unbalanced)
             if profile != DEFAULT_MATRIX_PROFILE:
                 matrix = dict(getattr(cost, "matrix", {}))
                 if not matrix:
@@ -175,6 +185,16 @@ class QuantumModel:
             "not a gate-level estimate or a security lower bound.",
             "Random-code ensemble survival proxy; not a per-matrix or mean-runtime upper bound.",
         )
+        if instance.block_profile is not None:
+            assumptions += (
+                "Known block weights modify the outer information-weight event during parameter optimization. "
+                "Coordinates are shuffled uniformly within the selected information region, preserving the "
+                "conditional Ka17 half/quarter split probability and the inner list costs.",
+                "Block-conditioned success is applied before representation survival and the solution union; "
+                "the common random-rank proxy and setup cost are unchanged. Additional structural attacks "
+                "and block-dependent matrix-rank effects are not modeled.",
+                "An explicit solution count assumes that every counted solution has the supplied block-weight profile.",
+            )
         if solutions > 0 or codeword_finding:
             assumptions += (
                 "Independent-solution outer union proxy rho*(1-(1-P*sigma)^M), applied during "

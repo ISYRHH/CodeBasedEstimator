@@ -114,7 +114,7 @@ def test_cli_csv_distinguishes_requested_orbit_context_from_effective_fallback(s
                 assert row["status"] == "computed"
                 assert 1 <= int(row["active_targets"]) <= 11
                 assert row["cost_model"] == ("ce-mage-generator-v2" if row["algorithm"] == "MAGE-Stern"
-                                              else "ce-doom-finite-v1")
+                                              else "ce-doom-finite-v2")
                 assert row["effective_doom"] == "doom:qcsd"
                 assert row["effective_targets"] == row["active_targets"]
             else:

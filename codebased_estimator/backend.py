@@ -16,6 +16,141 @@ from .models import AttackInstance, Estimate, Options, Problem
 from .doom_fallback import single_target_fallback
 
 
+def _ce_outer_event(algorithm, parameters):
+    """Return the aggregate outer event and CE's unsaturated log probability.
+
+    Selected coordinates are shuffled within the tail and its complement.
+    Consequently the half-list and intermediate-region constraints retain
+    their CE conditional probabilities after conditioning on total weight.
+    """
+    from .classical_doom import _logcomb
+
+    name = type(algorithm).__name__
+    n, k, w = algorithm.problem.get_parameters()
+    p, ell = parameters.get("p", 0), parameters.get("l", 0)
+    if name == "Prange":
+        tail, weight, split = n-k, 0, 0.0
+    elif name == "Stern":
+        tail, weight, split = n-k, 2*p, 2*_logcomb(k//2, p)
+    elif name == "BallCollision":
+        pl = parameters["pl"]
+        tail, weight = n-k-ell, 2*(p+pl)
+        split = 2*_logcomb(k//2, p)+2*_logcomb(ell//2, pl)
+    elif name == "BothMay":
+        tail, weight = n-k-ell, 2*p+parameters["w2"]
+        split = 2*_logcomb(k//2, p)+_logcomb(ell, parameters["w2"])
+    elif name in ("Dumer", "BJMMd2", "BJMMd3", "MayOzerovD2", "MayOzerovD3", "BJMMplus"):
+        # This adapter does not enable CE's separate QC variant of BJMMplus.
+        qc = getattr(algorithm, "qc", 0) if name == "BJMMplus" else 0
+        if qc:
+            raise ValueError("Unbalanced CE hook does not model BJMMplus qc mode")
+        tail, weight = n-k-ell, 2*p
+        split = 2*_logcomb((k+ell)//2, p)
+    else:
+        return None
+    return tail, weight, _logcomb(tail, w-weight)+split-_logcomb(n, w)
+
+
+def _install_ce_outer_probability(algorithm, profile):
+    """Install an instance-local probability objective before CE optimization.
+
+    No package source or process-global class is modified. List, matrix,
+    representation, and (for Stern) IM projection costs stay unchanged.
+    """
+    from .unbalanced import optimize_outer
+
+    name = type(algorithm).__name__
+    if name in ("BJMMdw", "BJMMpdw"):
+        from .ce_disjoint_outer import install_disjoint_outer
+        return install_disjoint_outer(algorithm, profile)
+    if name in ("BJMM", "MayOzerov"):
+        children = {depth: getattr(algorithm, f"{name}_depth_{depth}") for depth in (2, 3)}
+        detail_functions = {depth: _install_ce_outer_probability(child, profile)
+                            for depth, child in children.items()}
+        algorithm._time_complexity_is_convex = False
+        original = algorithm._time_and_memory_complexity
+
+        def evaluate_depth(parameters, verbose_information=None):
+            # CE checks the child's feasibility before asking it to optimize.
+            # A fresh parent evaluated with explicit {r, depth} therefore
+            # reports infinity unless its selected child is initialized first.
+            # Keep depth selection and all child costs in CE, but make replay
+            # independent of a preceding no-argument optimization call.
+            child = children.get(parameters.get("depth"))
+            if child is not None:
+                child.optimal_parameters()
+            return original(parameters, verbose_information)
+
+        algorithm._time_and_memory_complexity = evaluate_depth
+
+        def details(parameters):
+            depth = parameters["depth"]
+            child_parameters = children[depth].optimal_parameters().copy()
+            return {**detail_functions[depth](child_parameters),
+                    "depth": depth, "child_parameters": child_parameters}
+
+        return details
+    if name not in ("Prange", "Stern", "Dumer", "BallCollision", "BothMay", "BJMMplus",
+                    "BJMMd2", "BJMMd3", "MayOzerovD2", "MayOzerovD3"):
+        return None
+    original = algorithm._time_and_memory_complexity
+    # Base-list generation is still a lower bound on one iteration, and the
+    # replacement repetition exponent is nonnegative. Retain those safe CE
+    # prunes. BJMMplus also treats memory as a work lower bound, so disable
+    # its hook rather than assuming the proxy remains a strict lower bound.
+    if name == "BJMMplus":
+        algorithm._is_early_abort_possible = lambda *args, **kwargs: False
+    algorithm._time_complexity_is_convex = False
+
+    def correction(parameters, event=None):
+        tail, weight, uniform_event = event or _ce_outer_event(algorithm, parameters)
+        outer = optimize_outer(profile, tail, weight)
+        solutions = algorithm.problem.nsolutions
+        old = max(0.0, -uniform_event-solutions)
+        new = max(0.0, -uniform_event-outer.gain-solutions)
+        return outer, old, new
+
+    def evaluate(parameters, verbose_information=None):
+        result = original(parameters, verbose_information)
+        if isinstance(result, tuple) and math.isfinite(result[0]):
+            from .classical_doom import _logcomb
+            event = _ce_outer_event(algorithm, parameters)
+            tail, weight, uniform_event = event
+            n, _, w = algorithm.problem.get_parameters()
+            uniform_total = (_logcomb(tail, w-weight)+_logcomb(n-tail, weight)-_logcomb(n, w))
+            solutions = algorithm.problem.nsolutions
+            old = max(0.0, -uniform_event-solutions)
+            # The block-total probability cannot exceed one. Conditional
+            # half-list constraints still cost at least this many repeats.
+            lower = result[0]-old+max(0.0, uniform_total-uniform_event-solutions)
+            if algorithm._is_early_abort_possible(lower):
+                return math.inf, result[1]
+            _, old, new = correction(parameters, event)
+            result = (result[0]-old+new, result[1])
+            if verbose_information is not None:
+                verbose_information["permutations"] = new
+        elif isinstance(result, dict):
+            # CE 2.1.1 depth-three verbose methods return the dictionary.
+            _, _, new = correction(parameters)
+            result["permutations"] = new
+        return result
+
+    algorithm._time_and_memory_complexity = evaluate
+
+    def details(parameters):
+        outer, old, new = correction(parameters)
+        tail, weight, _ = _ce_outer_event(algorithm, parameters)
+        return {**outer.to_dict(), "applied": True,
+                "model": "block_outer_probability", "strategy": "block_allocation",
+                "tail_size": tail, "information_weight": weight,
+                "log2_permutations_before": old, "log2_permutations_after": new,
+                "log2_repetition_gain": old-new,
+                "inner_costs": "unchanged CE costs; uniform shuffle within selected regions",
+                "search": "CE parameter search with profile objective; convex shortcuts disabled; base-list and conditional-probability lower-bound pruning"}
+
+    return details
+
+
 def _m4ri_cost(n: int, k: int, r: int) -> int:
     helper = importlib.import_module("cryptographic_estimators.SDEstimator.sd_helper")
     return helper._gaussian_elimination_complexity(n, k, r)
@@ -80,6 +215,157 @@ def _json_value(value):
     raise TypeError(f"Unsupported upstream result type: {type(value).__name__}")
 
 
+def _ce_bjmm_depth3(instance: AttackInstance, options: Options) -> Estimate:
+    """Optimize a fresh CE depth-three child with the ordinary SD conventions.
+
+    This deliberately does not reuse the parent's selected depth or parameters.
+    A profile, when present, uses the existing per-parameter outer-probability
+    hook; its generic competitor is constructed separately by the caller.
+    """
+    sd = importlib.import_module("cryptographic_estimators.SDEstimator.sd_problem")
+    bjmm = importlib.import_module("cryptographic_estimators.SDEstimator.SDAlgorithms.bjmm")
+    parameters = instance.problem.parameters
+    bound = options.memory_bound_log2_bits
+    kwargs = {"memory_bound": math.inf if bound is None else bound}
+    if instance.problem.log2_solutions is not None:
+        kwargs["nsolutions"] = instance.problem.log2_solutions
+    problem = sd.SDProblem(*(parameters[key] for key in ("n", "k", "w")), **kwargs)
+    algorithm = bjmm.BJMMd3(problem, bit_complexities=1, complexity_type=0,
+                            memory_access=0)
+    profile = instance.block_profile
+    outer_details = (_install_ce_outer_probability(algorithm, profile)
+                     if profile is not None else None)
+    time = algorithm.time_complexity()
+    memory = algorithm.memory_complexity()
+    time = float(time) if time is not None else math.inf
+    memory = float(memory) if memory is not None else math.inf
+    feasible = (math.isfinite(time) and math.isfinite(memory)
+                and (bound is None or memory <= bound))
+    optimized = algorithm.get_optimal_parameters_dict()
+    details = {
+        "estimator": "SDEstimator", "upstream_algorithm": "BJMMd3",
+        "bit_complexities": 1, "complexity_type": 0, "memory_access": 0,
+        "memory_bound_log2_bits": bound,
+        "effective_log2_solutions": problem.nsolutions,
+        "solution_count_policy": ("upstream default" if instance.problem.log2_solutions is None
+                                  else "explicit log2 count"),
+    }
+    if outer_details is not None and feasible:
+        details["unbalanced"] = outer_details(optimized)
+    return Estimate(
+        algorithm="BJMM", model="classical",
+        status="computed" if feasible else "infeasible",
+        time_log2=time if math.isfinite(time) else None,
+        memory_log2=memory if math.isfinite(memory) else None,
+        parameters=_json_value({"depth": 3, **optimized}),
+        reason="" if feasible else "No finite CE depth-three estimate satisfies the memory bound.",
+        metadata=_json_value(details),
+    )
+
+
+def _with_bjmm_depth3_candidate(instance: AttackInstance, options: Options,
+                                explicit: Estimate) -> Estimate:
+    """Add only CE depth three / sqrt(M) to the explicit depth-two candidate.
+
+    The unchanged CE parent is already retained by ``estimate_doom``. The
+    empirical discount is independent of the depth-three search parameters;
+    neither the explicit DOOM cost nor CE depth two is discounted here.
+    """
+    if instance.targets == 1:
+        return explicit
+    profile = instance.block_profile
+    candidates = []
+    strategies = [("ce_depth3_sqrt_targets", None, instance.targets)]
+    if profile is not None:
+        strategies.append(("profile_ce_depth3_sqrt_targets", profile,
+                           profile.preserving_targets(instance.targets)))
+    for strategy, candidate_profile, active in strategies:
+        raw = _ce_bjmm_depth3(replace(instance, tags=(), targets=1,
+                                     block_profile=candidate_profile), options)
+        discount = 0.5 * math.log2(active)
+        time = max(0.0, raw.time_log2-discount) if raw.status == "computed" else raw.time_log2
+        candidates.append((strategy, active, raw, time, discount))
+    selected = None
+    for candidate in candidates:
+        _, _, raw, time, _ = candidate
+        if (raw.status == "computed" and
+                (explicit.status != "computed" or time < explicit.time_log2) and
+                (selected is None or time < selected[3])):
+            selected = candidate
+    comparison = {
+        "policy": "minimum of explicit depth-two DOOM, unchanged CE baseline, and independently optimized CE depth three / sqrt(M)",
+        "explicit_or_baseline_time_log2": explicit.time_log2,
+        "explicit_or_baseline_strategy": explicit.metadata["doom"]["strategy"],
+        "depth_two_sqrt_discount_applied": False,
+        "candidates": [{
+            "strategy": strategy, "depth": 3, "status": raw.status,
+            "active_targets": active, "single_target_time_log2": raw.time_log2,
+            "time_log2": time, "memory_log2": raw.memory_log2,
+            "log2_speedup": discount, "parameters": raw.parameters,
+            "effective_log2_solutions": raw.metadata.get("effective_log2_solutions"),
+            **({"unbalanced": raw.metadata["unbalanced"]}
+               if "unbalanced" in raw.metadata else {}),
+        } for strategy, active, raw, time, discount in candidates],
+    }
+    if selected is None:
+        return replace(explicit, metadata={
+            **explicit.metadata,
+            "doom": {**explicit.metadata["doom"], "bjmm_depth3_comparison": comparison},
+        })
+    strategy, active, raw, time, discount = selected
+    baseline_time = explicit.metadata["doom"].get("baseline_time_log2")
+    search = {
+        "method": "independent CE fixed-depth-three optimization",
+        "depth": 3, "parameters_optimized": ["r", "p", "p1", "p2", "l"],
+        "profile_outer_probability": strategy == "profile_ce_depth3_sqrt_targets",
+        "discount_parameter_independent": True, "baseline_retained": True,
+    }
+    details = {
+        **raw.metadata, "tags": list(instance.tags), "targets": instance.targets,
+        "heuristic": True,
+        "doom": {
+            "model": "sqrt_targets_approximation",
+            "cost_model": "ce-bjmm-depth3-sqrt-targets-v1",
+            "strategy": strategy, "depth": 3,
+            "available_targets": instance.targets, "active_targets": active,
+            "baseline_time_log2": baseline_time,
+            "single_target_time_log2": raw.time_log2,
+            "log2_speedup": baseline_time-time if baseline_time is not None else None,
+            "log2_proxy_speedup": discount,
+            "realized_log2_proxy_speedup": raw.time_log2-time,
+            "postprocessing_speedup_applied": True,
+            "search": search,
+            "explicit_doom_search": explicit.metadata["doom"]["search"],
+            "bjmm_depth3_comparison": comparison,
+        },
+    }
+    if profile is not None:
+        preserving = profile.preserving_targets(instance.targets)
+        details["unbalanced"] = {
+            **raw.metadata.get("unbalanced", {}),
+            "applied": strategy == "profile_ce_depth3_sqrt_targets",
+            "strategy": (strategy if strategy == "profile_ce_depth3_sqrt_targets"
+                         else "generic_full_orbit"),
+            "profile_preserving_targets": preserving,
+            "available_targets": instance.targets,
+            "target_policy": "depth-three sqrt-target proxy uses the profile-preserving subgroup; full generic orbit retained separately",
+            "search": search,
+        }
+        details["doom"]["profile_preserving_targets"] = preserving
+    assumptions = (
+        "CE BJMM depth three is independently optimized under the supplied per-syndrome solution count and memory bound.",
+        "QCSD applies an empirical sqrt(M) time-speedup approximation to this depth-three CE cost; parameters and memory are unchanged.",
+        "Target correlations and algorithm-specific depth-three multi-target list costs are not modeled.",
+        "Explicit depth-two DOOM and the unchanged CE baseline remain separate candidates; no additional discount is applied to either.",
+    )
+    if profile is not None:
+        assumptions += (
+            "The profile candidate uses the existing block-outer-probability hook before CE optimization and only profile-preserving targets; the full generic orbit is evaluated separately with the same solution count.",
+        )
+    return replace(raw, time_log2=time, assumptions=assumptions,
+                   references=explicit.references, metadata=_json_value(details))
+
+
 def _git_output(directory: Path, *arguments: str):
     try:
         result = subprocess.run(
@@ -120,6 +406,7 @@ class ClassicalModel:
 
     MAGE-Stern uses a local finite branching model in the same CE bit units.
     For QCSD, Prange, Stern, Dumer and BJMM optimize explicit DOOM costs;
+    BJMM additionally compares independently optimized CE depth three / sqrt(M).
     MAGE-Stern integrates targets into its branching cost and probability.
     Remaining binary algorithms use a marked square-root-of-targets approximation.
     QCCF supplies log2(targets) as CE's solution count; MAGE instead uses a
@@ -244,6 +531,29 @@ class ClassicalModel:
             search_options["codewords"] = instance.targets
         cost = optimize(parameters["n"], parameters["k"], parameters["w"],
                         **search_options)
+        profile = instance.block_profile
+        profile_comparison = None
+        if profile is not None:
+            available = profile.preserving_targets(instance.targets)
+            profile_options = {**search_options, "block_profile": profile}
+            profile_options["codewords" if codeword_finding else "targets"] = available
+            corrected = optimize(parameters["n"], parameters["k"], parameters["w"],
+                                 **profile_options)
+            selected = corrected is not None and (cost is None or corrected.time_log2 < cost.time_log2)
+            profile_comparison = {
+                "model": "block-profile-first-transition-tree-v1",
+                "selected_strategy": "block_profile" if selected else "uniform_full_orbit",
+                "available_targets": instance.targets,
+                "profile_preserving_targets": available,
+                "uniform_time_log2": cost.time_log2 if cost else None,
+                "profile_time_log2": corrected.time_log2 if corrected else None,
+                "full_orbit_baseline_retained": True,
+                "mixed_profile_target_batching": False,
+            }
+            if selected:
+                cost = corrected
+                if codeword_finding:
+                    effective_solutions = math.log2(available)
         details = {
             "estimator": "local MAGE-Stern",
             "cost_model": QCCF_COST_MODEL if codeword_finding else COST_MODEL,
@@ -277,6 +587,8 @@ class ClassicalModel:
                 "input_conversion": "parity-check to generator conversion charged once",
             },
         }
+        if profile_comparison is not None:
+            details["unbalanced"] = profile_comparison
         bound = options.memory_bound_log2_bits
         time = cost.time_log2 if cost else math.inf
         memory = cost.memory_log2 if cost else math.inf
@@ -303,14 +615,18 @@ class ClassicalModel:
                 "target_semantics": "nonzero_codewords",
                 "effective_syndrome_targets": 1,
                 "available_codewords": instance.targets,
-                "codeword_sampling_model": "uniform_weight_support_proxy",
+                "codeword_sampling_model": (
+                    "block_profile_first_transition_proxy"
+                    if profile_comparison and profile_comparison["selected_strategy"] == "block_profile"
+                    else "uniform_weight_support_proxy"
+                ),
                 "zero_syndrome_cost_model": "single_syndrome_ce_proxy_including_representative_overhead",
                 "doom": {
                     "model": "mage_stern_codeword_proxy",
                     "cost_model": QCCF_COST_MODEL,
                     "available_targets": instance.targets,
                     "available_codewords": instance.targets,
-                    "active_codewords": instance.targets if feasible else None,
+                    "active_codewords": cost.parameters.get("codewords", instance.targets) if feasible else None,
                     "effective_syndrome_targets": 1,
                     "effective_log2_solutions": effective_solutions,
                     "postprocessing_speedup_applied": False,
@@ -346,6 +662,15 @@ class ClassicalModel:
             assumptions += (
                 "QCSD syndrome targets are usable under the model's random-error branching assumptions; "
                 "correlations between cyclic shifts are not modeled and no separate sqrt(targets) discount is applied.",
+            )
+        if profile is not None:
+            assumptions += (
+                "The block-weight candidate chooses the first pivot block with fixed per-block quotas, "
+                "then uniformly shuffles all remaining coordinates. Its exact first-weight distribution "
+                "enters the full branching recursion before branch unions; deeper block structure is not used.",
+                "Only targets whose block permutation preserves the supplied weights share that quota strategy. "
+                "The original full-orbit uniform candidate is retained; different profile classes are not "
+                "assigned separate cost-free optimized allocations. Rank and target independence proxies remain unchanged.",
             )
         return Estimate(
             algorithm=name, model=self.name,
@@ -387,6 +712,16 @@ class ClassicalModel:
         self, name: str, instance: AttackInstance, options: Options,
     ) -> Estimate:
         """Receive the full tagged instance before applicability checks and optimization."""
+        if (instance.block_profile is not None and instance.problem.log2_solutions is None
+                and "doom:qccf" not in instance.tags):
+            from .classical_doom import _logcomb
+            profile = instance.block_profile
+            count = max(0.0, sum(_logcomb(length, weight) for length, weight in
+                                zip(profile.lengths, profile.weights))
+                        -(instance.problem.parameters["n"]-instance.problem.parameters["k"]))
+            # Ignoring sampling constraints does not broaden the acceptable
+            # solution set: generic and profile candidates share this count.
+            instance = replace(instance, problem=replace(instance.problem, log2_solutions=count))
         if name == "MAGE-Stern":
             return self._estimate_mage(instance, options)
         problem = self._backend_problem(instance)
@@ -411,6 +746,43 @@ class ClassicalModel:
                     "The QCCF solution-count proxy has no reduction for additional structure: "
                     + ", ".join(instance.structure),
                 )
+            if instance.block_profile is not None:
+                preserving = instance.block_profile.preserving_targets(instance.targets)
+                if preserving < instance.targets:
+                    generic = ClassicalModel.estimate_algorithm(
+                        self, name, replace(instance, block_profile=None), options,
+                    )
+                    restricted = ClassicalModel.estimate_algorithm(
+                        self, name, replace(instance, targets=preserving,
+                                            block_profile=replace(instance.block_profile, target_permutations=())),
+                        options,
+                    )
+                    take_restricted = (restricted.status == "computed" and
+                                       (generic.status != "computed" or
+                                        restricted.time_log2 < generic.time_log2))
+                    selected_result = restricted if take_restricted else generic
+                    selected_assumptions = selected_result.assumptions
+                    if take_restricted:
+                        selected_assumptions = tuple(
+                            item for item in selected_assumptions if not item.startswith("CE receives nsolutions=")
+                        ) + ("The profile candidate uses log2(active_codewords) for its profile-preserving codewords; the full supplied codeword orbit remains a separate generic candidate.",)
+                    return replace(selected_result, assumptions=selected_assumptions, metadata={
+                        **selected_result.metadata, "targets": instance.targets,
+                        "solution_count_policy": ("profile-preserving active codewords: log2(active_codewords)"
+                                                  if take_restricted else selected_result.metadata.get("solution_count_policy")),
+                        "unbalanced": {
+                            **selected_result.metadata.get("unbalanced", {}),
+                            "applied": take_restricted and restricted.metadata.get("unbalanced", {}).get("applied", False),
+                            "strategy": "profile_preserving_codewords" if take_restricted else "generic_full_orbit",
+                            "profile_preserving_targets": preserving,
+                            "generic_time_log2": generic.time_log2,
+                            "profile_candidate_time_log2": restricted.time_log2,
+                            "target_policy": "shared allocation only for codewords with the original block-weight profile",
+                        },
+                        "doom": {**selected_result.metadata["doom"],
+                                 "available_targets": instance.targets,
+                                 "active_codewords": preserving if take_restricted else instance.targets},
+                    })
             # A fresh CE instance receives the solution count before its
             # parameter search. Calling the base method preserves the outer
             # algorithm hook's original tagged context, as for QCSD below.
@@ -436,7 +808,7 @@ class ClassicalModel:
                     "usable orbit members; orbit size and independence are not inferred.",
                     "CE receives nsolutions=log2(targets) before optimization, replacing its "
                     "default solution count; no additional DOOM time discount is applied.",
-                ),
+                ) + (result.assumptions if instance.block_profile is not None else ()),
                 metadata={
                     **result.metadata,
                     "tags": list(instance.tags),
@@ -465,7 +837,10 @@ class ClassicalModel:
             # Keep each syndrome's solution count unchanged. This internal
             # single-target baseline is not another requested algorithm hook.
             baseline = ClassicalModel.estimate_algorithm(
-                self, name, replace(instance, tags=(), targets=1), options,
+                self, name, replace(instance, tags=(), targets=1,
+                                    block_profile=None if family == "SDEstimator" and
+                                    name in ("Prange", "Stern", "Dumer", "BJMM")
+                                    else instance.block_profile), options,
             )
             if family != "SDEstimator":
                 return single_target_fallback(
@@ -476,13 +851,17 @@ class ClassicalModel:
             if name in ("Prange", "Stern", "Dumer", "BJMM"):
                 from .classical_doom import estimate_doom
 
-                return estimate_doom(name, instance, options, baseline)
-            speedup = 0.5 * math.log2(instance.targets)
+                result = estimate_doom(name, instance, options, baseline)
+                return (_with_bjmm_depth3_candidate(instance, options, result)
+                        if name == "BJMM" else result)
+            active_targets = (instance.block_profile.preserving_targets(instance.targets)
+                              if instance.block_profile is not None else instance.targets)
+            speedup = 0.5 * math.log2(active_targets)
             time = baseline.time_log2
             computed = (baseline.status == "computed" and time is not None
                         and math.isfinite(time))
             adjusted_time = max(0.0, time - speedup) if computed else time
-            return replace(
+            approximate = replace(
                 baseline,
                 time_log2=adjusted_time,
                 assumptions=(
@@ -491,7 +870,7 @@ class ClassicalModel:
                     "targets under one matrix; algorithm parameters and memory are unchanged.",
                     "This approximation does not model target correlations or "
                     "algorithm-specific multi-target list costs.",
-                ),
+                ) + (baseline.assumptions if instance.block_profile is not None else ()),
                 metadata={
                     **baseline.metadata,
                     "tags": list(instance.tags),
@@ -499,11 +878,34 @@ class ClassicalModel:
                     "doom": {
                         "model": "sqrt_targets_approximation",
                         "available_targets": instance.targets,
+                        "active_targets": active_targets,
                         "log2_speedup": speedup,
                         "realized_log2_speedup": time - adjusted_time if computed else None,
                     },
                 },
             )
+            if instance.block_profile is not None:
+                approximate = replace(approximate, metadata={
+                    **approximate.metadata, "unbalanced": {
+                        **approximate.metadata.get("unbalanced", {}),
+                        "profile_preserving_targets": active_targets,
+                        "target_policy": "sqrt-target proxy uses only profile-preserving targets; full generic orbit retained",
+                    },
+                })
+            if instance.block_profile is not None and active_targets < instance.targets:
+                generic = ClassicalModel.estimate_algorithm(
+                    self, name, replace(instance, block_profile=None), options,
+                )
+                if (generic.status == "computed" and
+                        (approximate.status != "computed" or generic.time_log2 <= approximate.time_log2)):
+                    return replace(generic, metadata={
+                        **generic.metadata, "unbalanced": {
+                            "applied": False, "strategy": "generic_full_orbit",
+                            "profile_preserving_targets": active_targets,
+                            "profile_candidate_time_log2": approximate.time_log2,
+                        },
+                    })
+            return approximate
         if instance.tags:
             reasons = {
                 "doom:qccf": "QCCF requires an algorithm-specific model of available codeword solutions/orbit candidates.",
@@ -574,6 +976,20 @@ class ClassicalModel:
         if len(algorithms) != 1 or type(algorithms[0]).__name__ != name:
             raise RuntimeError("Upstream algorithm selection did not match the requested algorithm.")
         algorithm = algorithms[0]
+        profile = instance.block_profile
+        outer_details = (_install_ce_outer_probability(algorithm, profile)
+                         if profile is not None and family == "SDEstimator" else None)
+        generic_baseline = None
+        if profile is not None:
+            if outer_details is None:
+                details["unbalanced"] = {
+                    "applied": False, "strategy": "generic_fallback",
+                    "reason": "No reviewed per-parameter outer-probability hook for this CE algorithm; generic costs retained.",
+                }
+            else:
+                generic_baseline = ClassicalModel.estimate_algorithm(
+                    self, name, replace(instance, block_profile=None), options,
+                )
         if family == "SDEstimator" and _seed_bounded_m4ri(algorithm):
             details["gaussian_elimination_search"] = (
                 "exact bounded equivalent of upstream 2.1.1 _optimize_m4ri; "
@@ -591,7 +1007,24 @@ class ClassicalModel:
         elif bound is not None and memory > bound:
             feasible = False
             reason = "The upstream result exceeds the requested log2 memory bound in bits."
-        return Estimate(
+        if outer_details is not None and feasible:
+            details["unbalanced"] = outer_details(algorithm.get_optimal_parameters_dict())
+            details["unbalanced"]["generic_baseline_time_log2"] = generic_baseline.time_log2
+        if family == "SDEstimator" and name == "BJMM":
+            # The parent already searched both children. Preserve the actual
+            # depth-two optimum as a local-DOOM seed even when depth three won.
+            # Fixed-parameter calls below do not launch another CE search.
+            child = algorithm.BJMM_depth_2
+            child_parameters = child.get_optimal_parameters_dict().copy()
+            if all(key in child_parameters for key in ("r", "p", "p1", "l")):
+                child_time = child.time_complexity(**child_parameters)
+                child_memory = child.memory_complexity(**child_parameters)
+                if (math.isfinite(child_time) and math.isfinite(child_memory)
+                        and (bound is None or child_memory <= bound)):
+                    details.update(ce_depth_two_parameters=child_parameters,
+                                   ce_depth_two_time_log2=child_time,
+                                   ce_depth_two_memory_log2=child_memory)
+        result = Estimate(
             algorithm=name,
             model=self.name,
             status="computed" if feasible else "infeasible",
@@ -599,6 +1032,19 @@ class ClassicalModel:
             memory_log2=memory if math.isfinite(memory) else None,
             parameters=optimized,
             reason=reason,
-            assumptions=("Generic unstructured single-target decoding; upstream classical cost model.",),
+            assumptions=(("Exact finite block-weight outer selection with uniform shuffling inside each selected region; CE inner list, representation, matrix-rank, and projection cost proxies are retained.",
+                          "The supplied solution count counts acceptable solutions with this block profile; the generic comparison uses the same count.",
+                          "Algorithm and block-allocation searches return the best evaluated strategy, not a global optimality proof.")
+                         if outer_details is not None else
+                         ("Generic unstructured single-target decoding; upstream classical cost model.",)),
             metadata=_json_value(details),
         )
+        if (generic_baseline is not None and generic_baseline.status == "computed"
+                and (not feasible or generic_baseline.time_log2 <= time)):
+            return replace(generic_baseline, metadata={
+                **generic_baseline.metadata,
+                "unbalanced": {"applied": False, "strategy": "generic_baseline",
+                               "profile_candidate_time_log2": result.time_log2,
+                               "reason": "The generic strategy is no more expensive than the profile-aware candidate."},
+            })
+        return result

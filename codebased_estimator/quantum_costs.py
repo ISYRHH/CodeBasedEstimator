@@ -16,6 +16,7 @@ from typing import Any, Optional
 from .list_costs import ce_ordered_merge_cost, setup_list_sizes
 from .matrix_costs import DEFAULT_MATRIX_PROFILE, matrix_budget, validate_profile
 from .quantum_search import SEARCH_VERSION, refine_candidates
+from .unbalanced import BlockProfile, optimize_outer
 
 
 COST_MODEL = "ka17-ce-ordered-average-v2"
@@ -31,6 +32,7 @@ class QuantumCost:
     details: dict[str, Optional[float]]
     search: dict[str, Any] = field(default_factory=dict)
     matrix: dict[str, Any] = field(default_factory=dict)
+    unbalanced: dict[str, Any] = field(default_factory=dict)
 
 
 def _logsum(*values: float) -> float:
@@ -116,11 +118,16 @@ def _log_solution_union(log2_q: float, log2_solutions: float) -> float:
 class _Model:
     def __init__(self, n: int, k: int, w: int, algorithm: str,
                  matrix_profile: str = DEFAULT_MATRIX_PROFILE, *,
-                 log2_solutions: float = 0.0, codeword_finding: bool = False):
+                 log2_solutions: float = 0.0, codeword_finding: bool = False,
+                 block_profile: Optional[BlockProfile] = None):
         _validate(n, k, w, algorithm)
         _validate_solutions(log2_solutions, codeword_finding)
         self.log2_solutions = log2_solutions
         self.codeword_finding = codeword_finding
+        if block_profile is not None:
+            block_profile.validate(n, w)
+        self.block_profile = block_profile
+        self.outer_cache: dict[tuple[int, int], Any] = {}
         self.matrix_profile = validate_profile(matrix_profile)
         self.n, self.k, self.w, self.algorithm = n, k, w, algorithm
         self.m = n - k
@@ -134,6 +141,29 @@ class _Model:
             tail[j] = tail[j + 1] + log1p(-2.0 ** (-j)) / _LN2
         self.rank_tail = tail
         self.shape_cache: dict[tuple[int, int, int], dict[str, Any]] = {}
+
+    def outer(self, ell: int, p: int):
+        """Optimize the weight event before conditional inner shuffling.
+
+        The uniform shuffle inside the information region preserves Ka17's
+        conditional half/quarter split probability. The block allocation
+        changes only the probability of putting a total of p errors there.
+        """
+        if self.block_profile is None:
+            return None
+        key = (ell, p)
+        if key not in self.outer_cache:
+            self.outer_cache[key] = optimize_outer(self.block_profile, self.m - ell, p)
+        return self.outer_cache[key]
+
+    def event_probability(self, log2_uniform: float, ell: int, p: int) -> float:
+        outer = self.outer(ell, p)
+        return (log2_uniform if outer is None else
+                min(0.0, log2_uniform + outer.gain))
+
+    def outer_metadata(self, ell: int, p: int) -> dict[str, Any]:
+        outer = self.outer(ell, p)
+        return {} if outer is None else outer.to_dict()
 
     def probability(self, log2_P, log2_rho, log2_sigma=0.0):
         """Independent-solution proxy; the common rank event stays outside."""
@@ -178,10 +208,15 @@ class _Model:
         V = comb(q, t)
         lv, lr = log2(V), log2(R)
         lp = (4 * lv if self.algorithm == "QSS" else 2 * _logcomb(q, p // 2)) + _logcomb(r, self.w - p) - self.log_nw
-        shape = dict(V=V, R=R, log2_V=lv, log2_R=lr, log2_P=min(0.0, lp),
+        uniform_lp = min(0.0, lp)
+        shape = dict(V=V, R=R, log2_V=lv, log2_R=lr,
+                     log2_P=self.event_probability(uniform_lp, ell, p),
                      log2_rho=self.rho(ell), log2_G=self.gauss(ell),
                      log2_g_leaf=log2(1 + t + q * V.bit_length() / self.n),
                      log2_T0=log2((q + 1) ** 2 * (t + 1) + self.n * (self.m + 1)))
+        if self.block_profile is not None:
+            shape.update(log2_P_uniform=uniform_lp,
+                         log2_outer_gain=self.outer(ell, p).gain)
         self.shape_cache[key] = shape
         return shape
 
@@ -193,15 +228,20 @@ class _Model:
         K, r = self.k + ell, self.m - ell
         if not (0 <= ell <= self.m and p in (0, K) and 0 <= self.w - p <= r):
             return None
-        lp = min(0.0, _logcomb(r, self.w - p) - self.log_nw)
+        uniform_lp = min(0.0, _logcomb(r, self.w - p) - self.log_nw)
+        lp = self.event_probability(uniform_lp, ell, p)
         lrho, lg = self.rho(ell), self.gauss(ell)
         lc, lt0 = log2(1 + p), log2(self.n * (self.m + 1))
         probability = self.probability(lp, lrho)
         time = _logsum(lt0, self.log_n - probability["log2_P_eff_model"] / 2 + _logsum(lg, lc))
+        details = dict(log2_P=lp, log2_rho=lrho, log2_sigma=0.0,
+                       log2_G=lg, log2_Q=lc, log2_T0=lt0,
+                       log2_direct_check=lc, **probability)
+        if self.block_profile is not None:
+            details.update(log2_P_uniform=uniform_lp,
+                           log2_outer_gain=self.outer(ell, p).gain)
         return QuantumCost(time, dict(ell=ell, p=p, d=0, u=1, a=0, b=0, branch="direct"),
-                           dict(log2_P=lp, log2_rho=lrho, log2_sigma=0.0,
-                                log2_G=lg, log2_Q=lc, log2_T0=lt0,
-                                log2_direct_check=lc, **probability))
+                           details, unbalanced=self.outer_metadata(ell, p))
 
     def walk_budget(self, sh: dict[str, Any], ell: int, u: int, f: int) -> dict[str, Optional[float]]:
         lu = log2(u)
@@ -254,7 +294,8 @@ class _Model:
                        _logsum(sh["log2_G"], a / 2 + details["log2_Q"]))
         return QuantumCost(time, dict(ell=ell, p=p, d=d, u=u, a=a, b=b,
                                       branch="full_list" if u == sh["V"] else "walk"),
-                           dict(details, log2_sigma=logsigma, **probability))
+                           dict(details, log2_sigma=logsigma, **probability),
+                           unbalanced=self.outer_metadata(ell, p))
 
     def evaluate(self, *, ell: int, p: int, d: int = 0, u: int = 1,
                  a: int = 0, b: int = 0) -> Optional[QuantumCost]:
@@ -285,7 +326,8 @@ def evaluate_parameters(n: int, k: int, w: int, algorithm: str, *, ell: int,
                         b: int = 0,
                         matrix_profile: str = DEFAULT_MATRIX_PROFILE,
                         log2_solutions: float = 0.0,
-                        codeword_finding: bool = False) -> Optional[QuantumCost]:
+                        codeword_finding: bool = False,
+                        block_profile: Optional[BlockProfile] = None) -> Optional[QuantumCost]:
     """Evaluate a specified integer point; infeasible points return None.
 
     Direct candidates are checked before leaf divisibility constraints. This
@@ -298,7 +340,8 @@ def evaluate_parameters(n: int, k: int, w: int, algorithm: str, *, ell: int,
     finding excludes the p=0 direct family, which yields only the zero word.
     """
     model = _Model(n, k, w, algorithm, matrix_profile,
-                   log2_solutions=log2_solutions, codeword_finding=codeword_finding)
+                   log2_solutions=log2_solutions, codeword_finding=codeword_finding,
+                   block_profile=block_profile)
     value = model.evaluate(ell=ell, p=p, d=d, u=u, a=a, b=b)
     return _with_matrix_metadata(value, n, k, matrix_profile)
 
@@ -332,7 +375,8 @@ def _grid(limit: int) -> list[int]:
 def _optimize(n: int, k: int, w: int, algorithm: str,
               matrix_profile: str = DEFAULT_MATRIX_PROFILE, *,
               log2_solutions: float = 0.0,
-              codeword_finding: bool = False) -> Optional[QuantumCost]:
+              codeword_finding: bool = False,
+              block_profile: Optional[BlockProfile] = None) -> Optional[QuantumCost]:
     """Exhaustive for n<=16; otherwise a deterministic multistart heuristic.
 
     Structural coordinates are ell, p/4 and d/2. Inner searches vary log2(u)
@@ -345,7 +389,8 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
     No optimum over the full large-instance domain is claimed.
     """
     model = _Model(n, k, w, algorithm, matrix_profile,
-                   log2_solutions=log2_solutions, codeword_finding=codeword_finding)
+                   log2_solutions=log2_solutions, codeword_finding=codeword_finding,
+                   block_profile=block_profile)
     m = n - k
     evaluated = 0
     best: Optional[QuantumCost] = None
@@ -428,6 +473,18 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
                  + _logcomb(r, w - p) - model.log_nw)
         upper_x = min(lv - 1, ell / 2)
         qbound = min(lv, max(.8 * lv, 2 * lv - 1.5 * upper_x))
+        if block_profile is not None and not complete and best is not None:
+            # The block-weight event is at most certain. Bound success by the
+            # conditional half/quarter split before performing the more
+            # expensive block convolution; this bound never assumes a gain G.
+            total_lp = _logcomb(K, p) + _logcomb(r, w - p) - model.log_nw
+            upper_lp = min(0.0, lp - total_lp)
+            lower = model.log_n - (_log_solution_union(upper_lp, log2_solutions)
+                                   + model.rho(ell)) / 2 + qbound
+            if lower > best.time_log2 + 1e-6:
+                shape_results[key] = None
+                return None
+        lp = model.event_probability(lp, ell, p)
         # sigma<=1 makes union(P) an upper bound on success for every b.
         # Keeping rho outside the union also preserves its common-event cap.
         lower = model.log_n - (_log_solution_union(lp, log2_solutions) + model.rho(ell)) / 2 + qbound
@@ -583,21 +640,25 @@ def _optimize(n: int, k: int, w: int, algorithm: str,
 
 
 def _search_with_solution_retention(n, k, w, algorithm, matrix_profile,
-                                    log2_solutions, codeword_finding):
+                                    log2_solutions, codeword_finding,
+                                    block_profile=None):
     # Omit default kwargs to preserve the legacy callable/search contract.
     options = {"codeword_finding": True} if codeword_finding else {}
     if log2_solutions:
         options["log2_solutions"] = log2_solutions
+    if block_profile is not None:
+        options["block_profile"] = block_profile
     candidate = _optimize(n, k, w, algorithm, matrix_profile, **options)
     if log2_solutions == 0:
         return candidate
-    single = _optimize(n, k, w, algorithm, matrix_profile,
-                       **({"codeword_finding": True} if codeword_finding else {}))
+    single_options = {key: value for key, value in options.items() if key != "log2_solutions"}
+    single = _optimize(n, k, w, algorithm, matrix_profile, **single_options)
     retained = None
     replay_evaluations = 0
     if single is not None:
         model = _Model(n, k, w, algorithm, matrix_profile,
-                       log2_solutions=log2_solutions, codeword_finding=codeword_finding)
+                       log2_solutions=log2_solutions, codeword_finding=codeword_finding,
+                       block_profile=block_profile)
         par = single.parameters
         if par["branch"] == "direct":
             retained = model.direct(par["ell"], par["p"])
@@ -639,10 +700,11 @@ def _search_with_solution_retention(n, k, w, algorithm, matrix_profile,
     return replace(selected, search=search)
 
 
-def optimize(n: int, k: int, w: int, algorithm: str, *,
-             matrix_profile: str = DEFAULT_MATRIX_PROFILE,
-             log2_solutions: float = 0.0,
-             codeword_finding: bool = False) -> Optional[QuantumCost]:
+def _optimize_with_matrix_retention(n: int, k: int, w: int, algorithm: str, *,
+                                    matrix_profile: str = DEFAULT_MATRIX_PROFILE,
+                                    log2_solutions: float = 0.0,
+                                    codeword_finding: bool = False,
+                                    block_profile: Optional[BlockProfile] = None) -> Optional[QuantumCost]:
     """Optimize a versioned profile/probability model and retain baselines.
 
     The default follows the original v2 search unchanged. An opt-in profile
@@ -656,16 +718,18 @@ def optimize(n: int, k: int, w: int, algorithm: str, *,
     validate_profile(matrix_profile)
     _validate_solutions(log2_solutions, codeword_finding)
     candidate = _search_with_solution_retention(
-        n, k, w, algorithm, matrix_profile, log2_solutions, codeword_finding)
+        n, k, w, algorithm, matrix_profile, log2_solutions, codeword_finding, block_profile)
     if matrix_profile == DEFAULT_MATRIX_PROFILE:
         return candidate
     legacy = _search_with_solution_retention(
-        n, k, w, algorithm, DEFAULT_MATRIX_PROFILE, log2_solutions, codeword_finding)
+        n, k, w, algorithm, DEFAULT_MATRIX_PROFILE, log2_solutions, codeword_finding,
+        block_profile)
     retained = None
     if legacy is not None:
         retained = evaluate_parameters(
             n, k, w, algorithm, matrix_profile=matrix_profile,
             log2_solutions=log2_solutions, codeword_finding=codeword_finding,
+            block_profile=block_profile,
             **{key: value for key, value in legacy.parameters.items() if key != "branch"},
         )
     available = [value for value in (retained, candidate) if value is not None]
@@ -693,3 +757,51 @@ def optimize(n: int, k: int, w: int, algorithm: str, *,
     if candidate is None:
         search["global_optimum"] = False
     return _with_matrix_metadata(replace(selected, search=search), n, k, matrix_profile)
+
+
+def optimize(n: int, k: int, w: int, algorithm: str, *,
+             matrix_profile: str = DEFAULT_MATRIX_PROFILE,
+             log2_solutions: float = 0.0,
+             codeword_finding: bool = False,
+             block_profile: Optional[BlockProfile] = None) -> Optional[QuantumCost]:
+    """Optimize the actual outer event jointly with the Ka17 parameters.
+
+    A block profile changes the success event before the solution union and
+    square-root repetitions. The old unconditioned search point is replayed
+    as an additional candidate, so changed heuristic paths cannot discard it.
+    With no block profile this is exactly the existing optimizer.
+    """
+    options = dict(matrix_profile=matrix_profile, log2_solutions=log2_solutions,
+                   codeword_finding=codeword_finding)
+    if block_profile is None:
+        return _optimize_with_matrix_retention(n, k, w, algorithm, **options)
+    block_profile.validate(n, w)
+    candidate = _optimize_with_matrix_retention(
+        n, k, w, algorithm, block_profile=block_profile, **options)
+    baseline = _optimize_with_matrix_retention(n, k, w, algorithm, **options)
+    retained = None
+    if baseline is not None:
+        retained = evaluate_parameters(
+            n, k, w, algorithm, block_profile=block_profile, **options,
+            **{key: value for key, value in baseline.parameters.items() if key != "branch"})
+    available = [value for value in (candidate, retained) if value is not None]
+    if not available:
+        return None
+    selected = min(available, key=lambda value: value.time_log2)
+    search = dict(candidate.search if candidate is not None else baseline.search)
+    search.update(
+        evaluated_points=(candidate.search["evaluated_points"] if candidate else 0)
+                         + (baseline.search["evaluated_points"] if baseline else 0)
+                         + int(retained is not None),
+        unbalanced_retention=dict(
+            applied=retained is not None,
+            baseline_time_log2=baseline.time_log2 if baseline is not None else None,
+            baseline_parameters=dict(baseline.parameters) if baseline is not None else None,
+            replayed_time_log2=retained.time_log2 if retained is not None else None,
+            corrected_search_time_log2=candidate.time_log2 if candidate is not None else None,
+            selected_from="baseline_replay" if selected is retained else "corrected_search",
+        ),
+    )
+    if candidate is None:
+        search["global_optimum"] = False
+    return replace(selected, search=search)
