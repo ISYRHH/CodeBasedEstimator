@@ -124,8 +124,8 @@ def test_classical_and_requested_quantum_algorithms_share_one_report(quantum_cos
     assert all(row.status == "computed" for row in classical)
     assert [row.algorithm for row in quantum] == ["QPrange", "QSS", "QMMT+"]
     assert set(report.backends) == {"classical", "quantum"}
-    assert quantum[0].status == "not_implemented"
-    assert quantum[0].time_log2 is None
+    assert quantum[0].status == "computed"
+    assert quantum[0].time_log2 is not None
     for row in quantum[1:]:
         assert row.status == "computed"
         assert row.time_log2 == quantum_cost.time_log2 and row.memory_log2 is None
@@ -135,7 +135,7 @@ def test_classical_and_requested_quantum_algorithms_share_one_report(quantum_cos
         assert row.metadata["cost_breakdown"] == quantum_cost.details
         assert row.metadata["search"] == quantum_cost.search
         assert row.reason
-    assert report.backends["quantum"]["implemented_algorithms"] == ["QSS", "QMMT+"]
+    assert report.backends["quantum"]["implemented_algorithms"] == ["QPrange", "QSS", "QMMT+"]
     json.dumps(report.to_dict(), allow_nan=False)
 
 
@@ -201,7 +201,7 @@ def test_defaults_include_upstream_classical_mage_and_registered_quantum_algorit
     assert report.options.classical_algorithms is None
     assert report.options.quantum_algorithms == QuantumModel.algorithms
     assert set(report.backends) == {"classical", "quantum"}
-    assert quantum[0].status == "not_implemented" and quantum[0].time_log2 is None
+    assert quantum[0].status == "computed" and quantum[0].time_log2 is not None
     assert all(row.status == "computed" and row.time_log2 == quantum_cost.time_log2
                and row.memory_log2 is None and row.reason for row in quantum[1:])
     minimum = min(row.time_log2 for row in classical)
@@ -210,7 +210,9 @@ def test_defaults_include_upstream_classical_mage_and_registered_quantum_algorit
         row for row in classical if row.time_log2 == minimum
     )
     assert report.conclusions["quantum"].status == "computed"
-    assert report.conclusions["quantum"].best == tuple(quantum[1:])
+    quantum_minimum = min(row.time_log2 for row in quantum)
+    assert report.conclusions["quantum"].best == tuple(
+        row for row in quantum if row.time_log2 == quantum_minimum)
     json.dumps(report.to_dict(), allow_nan=False)
 
 
@@ -243,6 +245,10 @@ def test_doom_is_instance_context_and_preserves_each_requested_algorithm(doom_ta
                 assert row.metadata["doom"]["model"] == "single_target_fallback"
                 assert row.metadata["effective_targets"] == 1
                 assert row.metadata["effective_log2_solutions"] == solutions
+        elif doom_tag == "doom:qcsd":
+            assert row.status == "computed"
+            assert row.time_log2 is not None and row.memory_log2 is None
+            assert row.metadata["effective_targets"] == 1
         else:
             assert row.status == "not_implemented"
             assert row.time_log2 is None and row.memory_log2 is None
@@ -391,7 +397,7 @@ report = estimate(
 )
 assert len(report.results) == 3
 assert report.results[0].algorithm == 'QPrange'
-assert report.results[0].status == 'not_implemented'
+assert report.results[0].status == 'computed'
 assert all(row.status == 'computed' for row in report.results[1:])
 assert report.conclusions['quantum'].status == 'computed'
 """

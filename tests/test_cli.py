@@ -53,7 +53,7 @@ def test_cli_defaults_include_mage_and_report_its_unsupported_multisolution_scop
     assert mage["time_log2"] is None and mage["memory_log2"] is None
     assert mage not in record["conclusions"]["classical"]["best"]
     assert tuple(row["algorithm"] for row in quantum) == QuantumModel.algorithms
-    assert quantum[0]["status"] == "not_implemented"
+    assert quantum[0]["status"] == "computed" and quantum[0]["time_log2"] is not None
     assert all(row["status"] == "computed" and row["time_log2"] is not None
                and row["memory_log2"] is None for row in quantum[1:])
     assert record["options"]["classical_algorithms"] is None
@@ -87,13 +87,13 @@ def test_cli_combines_independent_algorithm_lists_in_one_record(attack_file, cap
         ("quantum", "QPrange"), ("quantum", "QSS"), ("quantum", "QMMT+"),
     ]
     assert all(row["status"] == "computed" for row in rows[:2])
-    assert rows[2]["status"] == "not_implemented"
+    assert rows[2]["status"] == "computed"
     assert all(row["status"] == "computed" for row in rows[3:])
     conclusions = records[0]["conclusions"]
     assert conclusions["classical"]["status"] == "computed"
     assert conclusions["classical"]["best"] == [min(rows[:2], key=lambda row: row["time_log2"])]
     assert conclusions["quantum"]["status"] == "computed"
-    assert conclusions["quantum"]["best"] == [min(rows[3:], key=lambda row: row["time_log2"])]
+    assert conclusions["quantum"]["best"] == [min(rows[2:], key=lambda row: row["time_log2"])]
 
 
 def test_cli_prints_separate_classical_and_quantum_conclusions(attack_file, capsys):
@@ -124,7 +124,7 @@ def test_cli_doom_flags_preserve_solutions_and_algorithm_names(attack_file, caps
     assert all(row["status"] == "computed" and row["time_log2"] is not None
                and row["metadata"]["doom"]["available_targets"] == 32
                for row in classical)
-    assert quantum[0]["status"] == "not_implemented" and quantum[0]["time_log2"] is None
+    assert quantum[0]["status"] == "computed" and quantum[0]["time_log2"] is not None
     assert all(row["status"] == "computed" and row["time_log2"] is not None
                and row["metadata"]["effective_log2_solutions"] == 2 for row in quantum[1:])
     for row in quantum:

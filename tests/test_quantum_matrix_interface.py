@@ -99,11 +99,12 @@ def test_optional_profile_does_not_bypass_quantum_applicability(monkeypatch, cha
     assert row.metadata["matrix_profile"] == M4RI_MATRIX_PROFILE
 
 
-def test_optional_profile_does_not_implement_qprange():
+def test_qprange_reuses_optional_matrix_profile():
     settings = Options(classical_algorithms=(), quantum_algorithms=("QPrange",),
                        quantum_matrix_profile=M4RI_MATRIX_PROFILE)
     row, = estimate(attack(), options=settings).results
-    assert row.status == "not_implemented" and row.time_log2 is None
+    assert row.status == "computed" and row.time_log2 is not None
+    assert row.metadata["matrix_profile"] == M4RI_MATRIX_PROFILE
 
 
 @pytest.mark.parametrize("command", ["estimate", "demo", "hamming"])
@@ -185,8 +186,12 @@ def test_csv_identifies_cost_profile_without_changing_classical_metadata(monkeyp
             assert int(quantum["matrix_block_size"]) == point.matrix["block_size"]
         else:
             assert quantum["matrix_block_size"] == ""
-    assert pending["cost_model"] == pending["matrix_block_size"] == ""
-    assert pending["status"] == "not_implemented"
+    from codebased_estimator.qprange import COST_MODEL as PRANGE_MODEL, evaluate_qprange
+    point = evaluate_qprange(24, 12, 4, matrix_profile=profile)
+    assert pending["cost_model"] == PRANGE_MODEL
+    assert int(pending["matrix_block_size"]) == point.matrix["block_size"]
+    assert pending["status"] == "computed"
+    assert float(pending["time_log2"]) == point.time_log2
 
 
 def test_optional_selection_does_not_change_classical_costs():

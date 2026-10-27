@@ -98,19 +98,19 @@ def test_fallback_preserves_optimizer_failure(monkeypatch, algorithm):
     assert report.conclusions["quantum"].status == "unavailable"
 
 
-def test_missing_single_target_algorithm_stays_unimplemented(monkeypatch):
+def test_qprange_single_target_fallback_uses_fixed_point_without_optimization(monkeypatch):
     def forbidden(*args, **kwargs):
-        pytest.fail("QPrange has no single-target optimizer")
+        pytest.fail("QPrange must use its fixed point, not the optimizer")
 
     monkeypatch.setattr("codebased_estimator.quantum.optimize", forbidden)
     report = estimate(attack(), options=Options(
         classical_algorithms=(), quantum_algorithms=("QPrange",)))
     row, = report.results
-    assert row.status == "not_implemented"
-    assert row.time_log2 is None and row.memory_log2 is None
-    assert "finite quantum costs" in row.reason
+    assert row.status == "computed"
+    assert row.time_log2 is not None and row.memory_log2 is None
+    assert row.parameters["ell"] == row.parameters["p"] == 0
     assert row.metadata["doom"]["model"] == "single_target_fallback"
-    assert report.conclusions["quantum"].status == "unavailable"
+    assert report.conclusions["quantum"].status == "computed"
 
 
 def test_custom_model_owns_its_unsupported_doom_result():

@@ -360,7 +360,7 @@ def test_cli_binary_default_computes_upstream_algorithms_mage_and_quantum_time_e
                and row["memory_log2"] > 0 for row in classical)
     quantum = [row for row in record["results"] if row["model"] == "quantum"]
     assert [row["algorithm"] for row in quantum] == ["QPrange", "QSS", "QMMT+"]
-    assert quantum[0]["status"] == "not_implemented" and quantum[0]["time_log2"] is None
+    assert quantum[0]["status"] == "computed" and quantum[0]["time_log2"] is not None
     assert all(row["status"] == "computed" and row["time_log2"] > 0 and row["reason"]
                for row in quantum[1:])
     assert all(row["memory_log2"] is None and row["memory_unit"] == "not_estimated"
@@ -374,11 +374,9 @@ def test_cli_default_text_shows_all_algorithms_and_quantum_time_costs(small_bina
     output = capsys.readouterr().out
     for name in BINARY_CLASSICAL_ALGORITHMS | {"QPrange", "QSS", "QMMT+"}:
         assert any(line.split()[:1] == [name] for line in output.splitlines())
-    assert "not_implemented" in output
-    assert "finite quantum costs and independent parameter optimization are pending" in output
+    assert "finite quantum costs and independent parameter optimization are pending" not in output
     assert "Best classical:" in output
-    assert "Best quantum: QSS | time=2^" in output
-    assert "Best quantum: QMMT+ | time=2^" in output
+    assert "Best quantum: QPrange | time=2^" in output
     assert "memory=not estimated" in output
 
 
@@ -479,9 +477,9 @@ def test_cli_csv_keeps_explicit_quantum_selection(small_binary_hamming, capsys):
     assert classical["is_best"] == "True"
     assert quantum["algorithm"] == "QPrange"
     assert quantum["model"] == "quantum"
-    assert quantum["status"] == "not_implemented"
-    assert quantum["time_log2"] == quantum["memory_log2"] == ""
-    assert quantum["is_best"] == "False"
+    assert quantum["status"] == "computed"
+    assert float(quantum["time_log2"]) > 0 and quantum["memory_log2"] == ""
+    assert quantum["is_best"] == "True"
     assert quantum["reason"]
 
 
