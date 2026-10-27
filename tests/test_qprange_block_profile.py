@@ -8,6 +8,7 @@ import pytest
 
 from codebased_estimator import AttackInstance, BlockProfile, Options, Problem, estimate, hamming_instances
 from codebased_estimator.__main__ import main
+from codebased_estimator.assumptions import BLOCK_OUTER, BLOCK_SOLUTIONS
 from codebased_estimator.matrix_costs import MATRIX_PROFILES, matrix_budget
 from codebased_estimator.qprange import evaluate_qprange
 from codebased_estimator.quantum_costs import evaluate_parameters
@@ -81,7 +82,7 @@ def test_profile_metadata_and_qcsd_fallback_are_preserved(profile, solutions, mo
     assert direct.memory_log2 is None and direct.memory_unit == "not_estimated"
     assert fallback.metadata["effective_targets"] == 1
     assert fallback.metadata["doom"]["applied"] is False
-    assert any("Every counted solution" in line for line in direct.assumptions)
+    assert BLOCK_OUTER in direct.assumptions and BLOCK_SOLUTIONS in direct.assumptions
     assert "block profiles or structured-matrix rank" not in direct.metadata["not_included"]
     json.dumps(asdict(direct), allow_nan=False)
 
