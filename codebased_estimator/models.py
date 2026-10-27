@@ -9,6 +9,7 @@ from numbers import Real
 from typing import Any, Optional, Protocol
 
 from .matrix_costs import DEFAULT_MATRIX_PROFILE, validate_profile
+from .unbalanced import BlockProfile
 
 
 QUANTUM_ALGORITHMS = ("QPrange", "QSS", "QMMT+")
@@ -110,6 +111,7 @@ class AttackInstance:
     references: tuple[str, ...] = ()
     route_id: Optional[str] = None
     cost_proxy: Optional[dict[str, Any]] = None
+    block_profile: Optional[BlockProfile] = None
 
     def __post_init__(self):
         if self.goal not in ("key_recovery", "msg_recovery"):
@@ -127,6 +129,19 @@ class AttackInstance:
                 raise ValueError(f"{name} must be a nonempty string or null")
         for name in ("tags", "structure", "assumptions", "references"):
             object.__setattr__(self, name, _strings(getattr(self, name), name))
+        if self.block_profile is not None:
+            profile = self.block_profile
+            if isinstance(profile, dict):
+                profile = BlockProfile.from_dict(profile)
+            if not isinstance(profile, BlockProfile):
+                raise ValueError("block_profile must be a BlockProfile, object or null")
+            p = self.problem.parameters
+            if (self.problem.kind not in ("sd", "qcsd", "cfp", "qccf")
+                    or p.get("q", 2) != 2 or not {"n", "k", "w"}.issubset(p)):
+                raise ValueError("block_profile requires a binary Hamming decoding problem")
+            Problem("sd", dict(p), self.problem.log2_solutions)
+            profile.validate(p["n"], p["w"])
+            object.__setattr__(self, "block_profile", profile)
         if self.cost_proxy is not None:
             if not isinstance(self.cost_proxy, dict):
                 raise ValueError("cost_proxy must be a JSON object or null")

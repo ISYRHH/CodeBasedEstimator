@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from codebased_estimator import AttackInstance, Estimate, Options, Problem, estimate
+from codebased_estimator import AttackInstance, BlockProfile, Estimate, Options, Problem, estimate
 
 
 def instance(problem, **kwargs):
@@ -347,6 +347,17 @@ def test_invalid_solution_counts_are_rejected(solutions):
 def test_rank_solution_count_cannot_be_silently_ignored():
     with pytest.raises(ValueError, match="log2_solutions"):
         Problem("rank_sd", {"q": 2, "m": 8, "n": 8, "k": 4, "r": 2}, 0)
+
+
+@pytest.mark.parametrize("kind", ["cfp", "qccf"])
+def test_profile_qccf_with_extra_tag_is_unsupported_without_inserting_solution_count(kind):
+    attack = instance(Problem(kind, {"n": 20, "k": 10, "w": 3}),
+                      targets=6, tags=("doom:qccf", "unmodeled"),
+                      block_profile=BlockProfile((10, 10), (1, 2)))
+    rows = estimate(attack, options=Options(
+        classical_algorithms=("Prange", "MAGE-Stern"), quantum_algorithms=())).results
+    assert all(row.status == "not_implemented" and row.reason for row in rows)
+    assert attack.problem.log2_solutions is None
 
 
 @pytest.mark.parametrize("algorithm", ["DoesNotExist", "LeeBrickell"])

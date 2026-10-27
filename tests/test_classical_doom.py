@@ -52,7 +52,7 @@ def test_explicit_optimizer_can_keep_the_single_target_strategy(algorithm):
     assert result.time_log2 <= baseline.time_log2
     doom = result.metadata["doom"]
     assert doom["model"] == "parameter_optimized"
-    assert doom["cost_model"] == "ce-doom-finite-v1"
+    assert doom["cost_model"] == "ce-doom-finite-v2"
     assert doom["available_targets"] == 32
     assert 1 <= doom["active_targets"] <= 32
     assert doom["strategy"] in ("single_target_baseline", "explicit_doom")
@@ -150,7 +150,9 @@ def test_qary_fallback_preserves_an_impossible_memory_budget(algorithm):
 def test_bjmm_weight_deficit_matches_enumerated_errors_and_xor_representations():
     from codebased_estimator.doom_bjmm import bjmm_terms
 
-    point = bjmm_terms(12, 6, 4, ell=2, p=2, p1=2, weight_deficit=1)
+    # R=12 needs ceil(log2 R)=4 matching bits; l=2 is no longer admissible.
+    assert bjmm_terms(12, 6, 4, ell=2, p=2, p1=2, weight_deficit=1) is None
+    point = bjmm_terms(12, 4, 4, ell=4, p=2, p1=2, weight_deficit=1)
     assert point is not None
     errors = [set(support) for support in combinations(range(12), 4)]
     matching = [error for error in errors
@@ -167,7 +169,7 @@ def test_bjmm_weight_deficit_matches_enumerated_errors_and_xor_representations()
                        * count_representations({0}, 2, 1))
     assert representations == 12
     assert point["log2_representations"] == pytest.approx(log2(representations))
-    assert point["parameters"]["l1"] == 2
+    assert point["parameters"]["l1"] == 4
     assert point["details"]["base_weights"] == [2, 2, 2, 1]
     assert point["details"]["outside_weight"] == 3
 
@@ -186,7 +188,7 @@ def test_fixed_prange_cost_counts_shared_elimination_and_extra_syndromes(targets
     assert point.details["log2_success_probability"] == pytest.approx(log2(probability))
 
 
-@pytest.mark.parametrize("algorithm,left,right", [("Stern", 10, 11), ("Dumer", 12, 13)])
+@pytest.mark.parametrize("algorithm,left,right", [("Stern", 10, 10), ("Dumer", 12, 12)])
 def test_fixed_unequal_list_cost_matches_the_doom_success_and_merge_formula(algorithm, left, right):
     from codebased_estimator.classical_doom import evaluate_parameters
 
@@ -194,9 +196,14 @@ def test_fixed_unequal_list_cost_matches_the_doom_success_and_merge_formula(algo
     point = evaluate_parameters(n, k, w, algorithm, targets=targets,
                                 r=0, l=ell, p_left=2, p_right=1)
     a, b = comb(left, 2), comb(right, 1)
-    probability = min(1, targets * comb(n-k-ell, w-3) * a * b / comb(n, w))
+    tail = n-k if algorithm == "Stern" else n-k-ell
+    numerator = comb(tail, w-3)*a*b
+    probability = min(1, targets*numerator/comb(n, w))
+    projections = (max(1, (comb(n-k, w-3)//comb(n-k-ell, w-3))
+                       //max(1, targets*numerator//comb(n, w)))
+                   if algorithm == "Stern" else 1)
     work = (n * (n-k)**2 + (targets-1) * (n-k)**2
-            + n * (a + targets*b + targets*a*b / 2**ell))
+            + n * projections * (a + targets*(b + a*b//2**ell)))
     memory = n * (n-k+1 + a + targets*b) + (targets-1) * (n-k)
     assert point.time_log2 == pytest.approx(log2(work / probability))
     assert point.memory_log2 == pytest.approx(log2(memory))

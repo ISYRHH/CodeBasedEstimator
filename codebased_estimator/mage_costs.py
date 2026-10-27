@@ -26,6 +26,7 @@ COST_MODEL = "ce-mage-generator-v2"
 TARGET_SUCCESS_MODEL = "independent-target-tree-union-v1"
 QCCF_COST_MODEL = "ce-mage-qccf-codewords-v1"
 CODEWORD_SUCCESS_MODEL = "independent-codeword-tree-union-v1"
+BLOCK_SUCCESS_MODEL = "block-profile-first-transition-tree-v1"
 
 
 @dataclass(frozen=True)
@@ -132,12 +133,107 @@ def single_target_success_log2(n, k, w, ell, p, delta, blocks, repetitions):
 
 
 @lru_cache(maxsize=16384)
-def _list_logs(n, k, w, ell, p, delta):
-    from .classical_doom import _simple_terms
+def _survival_after_first(n, k, w, ell, p, delta, blocks, repetitions):
+    """Conditional survival after the first pivot block, including all branches.
 
-    terms = _simple_terms(n, k, w, "Stern", {"l": ell, "p_left": p, "p_right": p-delta})
-    left, right = terms["details"]["log2_base_lists"]
-    return left, right, terms["details"]["log2_outputs_per_target"], terms["log2_probability"]
+    After that block is chosen, all remaining coordinates are shuffled without
+    using their original block labels.  Conditional on the first block's error
+    weight, the ordinary hypergeometric transition kernel therefore applies.
+    """
+    z = 2*p-delta
+    terminal = min(0.0, _logcomb(k//2, p) + _logcomb(k-k//2, p-delta)
+                   - _logcomb(k, z) + _logcomb(n-k-ell, w-z)
+                   - _logcomb(n-k, w-z))
+    alive = [-inf]*z + [_log_any(terminal, repetitions[-1])]
+    previous_size = k
+    for block, repeat in zip(reversed(blocks[1:]), reversed(repetitions[1:-1])):
+        previous_size -= block
+        rows = _transition_log_rows(n, w, z, previous_size, block)
+        alive = [_log_any(min(0.0, _logadd(*(probability+alive[new_weight]
+                             for new_weight, probability in enumerate(row, old_weight)))), repeat)
+                 for old_weight, row in enumerate(rows)]
+    return tuple(alive)
+
+
+def block_profile_success_log2(n, k, w, ell, p, delta, blocks, repetitions,
+                              profile, first_tail_allocation):
+    """Whole-tree success when the first pivot block uses known block weights.
+
+    The allocation specifies how many coordinates of each original block
+    remain *outside* the first pivot block.  The conditional distribution is
+    mixed before taking the first branch union; a scalar correction to the
+    ordinary tree survival is not equivalent when branches can saturate.
+    """
+    from .unbalanced import log_distribution
+
+    alive = _survival_after_first(n, k, w, ell, p, delta, blocks, repetitions)
+    distribution = log_distribution(profile, tuple(first_tail_allocation), len(alive)-1)
+    one_child = min(0.0, _logadd(*(weight+survival
+                                  for weight, survival in zip(distribution, alive))))
+    return _log_any(one_child, repetitions[0])
+
+
+@lru_cache(maxsize=16384)
+def _optimize_profile_survival(n, k, w, ell, p, delta, blocks, repetitions, profile):
+    """Bounded deterministic allocation search for the entire tree objective.
+
+    The search is deliberately separate from a one-level probability gain:
+    different first-block weights have different descendant survival rates.
+    It is a heuristic for large domains, as is the surrounding tree search.
+    """
+    from .unbalanced import allocation_candidates
+
+    size = n-blocks[0]
+    evaluated = {}
+
+    def at(allocation):
+        allocation = tuple(allocation)
+        if allocation not in evaluated:
+            evaluated[allocation] = block_profile_success_log2(
+                n, k, w, ell, p, delta, blocks, repetitions, profile, allocation)
+        return evaluated[allocation]
+
+    seeds = allocation_candidates(profile, size)
+    # All feasible quotas for two small blocks make the finite tests and
+    # typical small examples exhaustive rather than relying on a local search.
+    exhaustive = len(profile.lengths) == 2 and min(profile.lengths) <= 128
+    if exhaustive:
+        seeds = tuple((first, size-first) for first in range(
+            max(0, size-profile.lengths[1]), min(size, profile.lengths[0])+1))
+    best = max(seeds, key=lambda allocation: (at(allocation), tuple(-x for x in allocation)))
+    if not exhaustive:
+        # A bounded scan at each scale avoids spending the tree-search budget
+        # on a separate unbounded optimizer.  Allocation evaluations are shared
+        # between target batch sizes by this function's cache.
+        for step in dict.fromkeys((max(1, n//32), max(1, n//256), 1)):
+            for _ in range(2):
+                previous = best
+                for source in range(len(profile.lengths)):
+                    for target in range(len(profile.lengths)):
+                        if source == target:
+                            continue
+                        moved = min(step, best[source], profile.lengths[target]-best[target])
+                        if moved == 0:
+                            continue
+                        candidate = list(best)
+                        candidate[source] -= moved
+                        candidate[target] += moved
+                        candidate = tuple(candidate)
+                        if at(candidate) > at(best)+1e-12:
+                            best = candidate
+                if best == previous:
+                    break
+    return at(best), tuple(best), len(evaluated), exhaustive
+
+
+@lru_cache(maxsize=16384)
+def _list_logs(n, k, w, ell, p, delta):
+    # MAGE's terminal event and expected collision cost are distinct from
+    # CE Stern's outer event plus integer IM projections. Keep this kernel
+    # independent so CE/DOOM alignment cannot change the branching model.
+    left, right = _logcomb(k//2, p), _logcomb(k-k//2, p-delta)
+    probability = min(0.0, _logcomb(n-k-ell, w-2*p+delta)+left+right-_logcomb(n, w))
+    return left, right, left+right-ell, probability
 
 
 @lru_cache(maxsize=8192)
@@ -151,7 +247,7 @@ def _tree_gaussian_logs(n, k, blocks, repetitions):
 
 def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=None,
                         targets=None, memory_bound_log2_bits=None, targets_used=None,
-                        codewords=None):
+                        codewords=None, block_profile=None, first_tail_allocation=None):
     """Evaluate a fixed CE-priced MAGE-Stern tree, or return None if invalid.
 
     ``blocks=(k,), repetitions=(1,1)`` is the ordinary Stern branching
@@ -174,6 +270,12 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
     The uniform-support recursion is a proxy, not an exact rank-conditioned
     codeword distribution.  p>=1 makes every enumerated information vector
     nonzero, excluding the zero word when the information set has full rank.
+
+    A ``block_profile`` adds an achievable quota strategy for the first pivot
+    block. Its entire weight distribution is passed into the remaining tree
+    recurrence. Later pivots and terminal splits ignore block labels. Uniform
+    first-block selection remains available, and no scalar entropy-gap or
+    one-leaf speedup is applied to the tree.
     """
     if targets is None:
         targets = 1 if targets_used is None else targets_used
@@ -194,6 +296,14 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
     if not _valid_parameters(n, k, w, ell, p, delta, blocks, repetitions,
                              targets, memory_bound_log2_bits):
         return None
+    if block_profile is not None:
+        from .unbalanced import BlockProfile
+
+        if isinstance(block_profile, dict):
+            block_profile = BlockProfile(**block_profile)
+        block_profile.validate(n, w)
+    elif first_tail_allocation is not None:
+        return None
     log_n, log_k, log_targets = log2(n), log2(k), log2(targets)
     left, right, matches, stern_probability = _list_logs(n, k, w, ell, p, delta)
     # Both tables are materialized, matching the existing CE-DOOM convention.
@@ -212,6 +322,36 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
     gaussian, leaves, level_gaussian = _tree_gaussian_logs(n, k, blocks, repetitions)
     tree_work = _logadd(gaussian, leaves+leaf_work)
     single_probability = single_target_success_log2(n, k, w, ell, p, delta, blocks, repetitions)
+    profile_details = None
+    if block_profile is not None:
+        uniform_probability = single_probability
+        if first_tail_allocation is None:
+            profiled_probability, allocation, _, _ = _optimize_profile_survival(
+                n, k, w, ell, p, delta, blocks, repetitions, block_profile)
+        else:
+            allocation = tuple(first_tail_allocation)
+            if (len(allocation) != len(block_profile.lengths)
+                    or any(type(value) is not int or not 0 <= value <= length
+                           for value, length in zip(allocation, block_profile.lengths))
+                    or sum(allocation) != n-blocks[0]):
+                return None
+            profiled_probability = block_profile_success_log2(
+                n, k, w, ell, p, delta, blocks, repetitions, block_profile, allocation)
+        # A fully random first block remains an available strategy.  Retain it
+        # if a bounded quota search misses an improving allocation.
+        single_probability = max(uniform_probability, profiled_probability)
+        profile_details = {
+            "model": BLOCK_SUCCESS_MODEL,
+            "selected_strategy": "block_profile" if profiled_probability > uniform_probability else "uniform",
+            "first_pivot_size": blocks[0],
+            "first_tail_allocation": list(allocation),
+            "log2_uniform_tree_probability": uniform_probability,
+            "log2_profile_tree_probability": profiled_probability if isfinite(profiled_probability) else None,
+            "log2_tree_probability_gain": single_probability-uniform_probability,
+            "scope": "first pivot block quota, then uniform shuffling of all remaining coordinates",
+            "deeper_block_structure_used": False,
+            "rank_model": "unchanged random-code full-rank proxy",
+        }
     probability = _log_any(single_probability, targets if codewords is None else codewords)
     if probability == -inf:
         return None
@@ -257,6 +397,10 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
     }
     parameters = {"ell": ell, "p": p, "delta": delta, "blocks": list(blocks),
                   "repetitions": list(repetitions), "targets_used": targets}
+    if block_profile is not None:
+        parameters["block_profile"] = block_profile.to_dict()
+        parameters["first_tail_allocation"] = list(allocation)
+        details["unbalanced"] = profile_details
     if codewords is not None:
         parameters["codewords"] = codewords
         details.update({
@@ -270,7 +414,11 @@ def evaluate_parameters(n, k, w, *, ell, p, delta=0, blocks=None, repetitions=No
             "target_success_model": CODEWORD_SUCCESS_MODEL,
             "target_success_formula": "1-(1-single_codeword_tree_survival)**codewords",
             "target_independence_assumption": "unconditional_independence_of_codeword_tree_failures",
-            "codeword_sampling_model": "uniform_weight_support_proxy",
+            "codeword_sampling_model": (
+                "block_profile_first_transition_proxy"
+                if profile_details and profile_details["selected_strategy"] == "block_profile"
+                else "uniform_weight_support_proxy"
+            ),
             "zero_codeword_exclusion": "positive_information_weight_and_full_rank_information_set",
             "zero_syndrome_cost_model": "single_syndrome_ce_proxy_including_representative_overhead",
         })

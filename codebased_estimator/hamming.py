@@ -11,6 +11,7 @@ from dataclasses import replace
 from .hamming_parameters import HAMMING_PARAMETERS
 from .models import AttackInstance, Problem
 from .mito_parity import MitoKeyParity
+from .unbalanced import BlockProfile
 
 
 HAMMING_SCHEMES = (
@@ -21,11 +22,13 @@ GOALS = ("key_recovery", "msg_recovery")
 # Resolve all classical candidates in the appropriate upstream field backend.
 DEFAULT_HAMMING_ALGORITHMS = None
 DOOM_MODES = ("auto", "none")
+UNBALANCED_MODES = ("auto", "none")
 COMPOSITE_MSG_SCHEMES = ("HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE")
 
 _ASSUMPTIONS = (
     "Generic ISD cost proxy for the documented recovery route; not a whole-scheme security estimate.",
-    "Block weights are collapsed to total Hamming weight; Unbalanced ISD and other structure-specific attacks are excluded.",
+    "Unbalanced outer selection uses known block weights where supported; inner structured lists, "
+    "cross-block support relations and structure-dependent rank probabilities are not modeled.",
     "Recovery postprocessing, candidate verification and their success probabilities are not costed.",
 )
 _KEY_ASSUMPTION = (
@@ -39,6 +42,33 @@ _MSG_ASSUMPTIONS = (
     "Compression/quantization residuals are not modeled; this is a simplified cost proxy, "
     "not a reduction from the actual unknown-message ciphertext.",
 )
+
+
+def _block_profile(entry, goal, *, composite=False, doom="auto"):
+    scheme, p = entry["scheme"], entry["parameters"]
+    key = goal == "key_recovery"
+    if scheme in ("QCTM", "UVW-KEM"):
+        return None
+    if scheme in ("BIKE_MLThre", "TRIKE"):
+        if not key:
+            return None  # The message error has only a prescribed total weight.
+        weights = [p["dv"]]*2 if scheme == "BIKE_MLThre" else [p["d"]]*3
+    elif scheme == "Mito":
+        weights = list(p["wx"]+p["wy"] if key else p["wr"]+p["wt"])
+    elif scheme == "QUBE":
+        weights = [p["wx"], p["wx"], p["wy"]] if key else [p["wf"], p["wf"], p["wg"]]
+    elif key:
+        weights = [p["wx"], p["wy"]] if scheme == "TriQ-KEM" else [p.get("w", p.get("wsk"))]*2
+    else:
+        weights = [p["wr1"], p["wr2"]] if scheme == "NSS-HQC" else [p["wr"]]*2
+    if composite:
+        weights.append(p["we"])
+    permutations = ()
+    if scheme == "Mito" and not composite and doom == "auto":
+        d = p["d"]
+        permutations = tuple(tuple(i ^ shift for i in range(d))
+                             + tuple(d+(i ^ shift) for i in range(d)) for shift in range(d))
+    return BlockProfile((p["r"],)*len(weights), tuple(weights), permutations)
 
 
 def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
@@ -65,7 +95,7 @@ def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
         baseline, name=f"{entry['parameter_set']}/key_recovery/parity", route_id="parity",
         problem=Problem("sd", proxy["effective_parameters"], log2_solutions=0),
         route="Mito P parity rank model: (n,k,w)=(2dr,dr-d,sum(wx_i)+sum(wy_i))",
-        cost_proxy=proxy,
+        cost_proxy=proxy, block_profile=None,
         assumptions=(*baseline.assumptions,
             "The augmented binary matrix has exact rank d*r+d. Generic ISD costs approximate it by "
             "a random full-rank SD matrix; sparse parity-row effects on pivots and lists are not modeled.",
@@ -80,6 +110,8 @@ def _mito_parity_key(entry: dict, baseline: AttackInstance) -> AttackInstance:
             "dyadic shifts permute parity labels. The full d*r orbit is a proxy assumption, not guaranteed distinct targets.",
             "This generic cost model of P supplies neither a search/decision reduction "
             "nor an optimality proof for generic ISD and excludes square/folding/lifting attacks.",
+            "Unbalanced outer selection is not combined with this parity-rank proxy: "
+            "the additional parity rows and exact block weights require a joint rank-conditioned model.",
         ),
     )
 
@@ -110,7 +142,8 @@ def _composite_message(entry: dict, *, doom: str) -> AttackInstance:
                    f"Joint core equations: {equation}.",
                    "Identity blocks for the first ephemeral vector and e give full row rank; "
                    "one designated acceptable solution per syndrome (log2_solutions=0). "
-                   "Parity, fixed block distributions and disjoint supports receive no extra discount.")
+                   "Fixed block weights enter supported outer probabilities; parity and disjoint supports "
+                   "receive no additional discount.")
     if scheme == "Mito":
         assumptions += (
             "Only truncation is removed: Pr still publishes one ring component, with one r-bit e. "
@@ -132,6 +165,7 @@ def _composite_message(entry: dict, *, doom: str) -> AttackInstance:
         problem=Problem("sd", {"n": n, "k": k, "w": w, "q": 2}, log2_solutions=0),
         route=f"Composite message core: (n,k,w)={formula}",
         targets=targets, tags=tags, assumptions=assumptions,
+        block_profile=_block_profile(entry, "msg_recovery", composite=True, doom=doom),
         references=tuple(entry["references"]),
     )
 
@@ -160,9 +194,12 @@ class HammingScheme:
     def parameter_sets(self) -> tuple[str, ...]:
         return tuple(row["parameter_set"] for row in HAMMING_PARAMETERS if row["scheme"] == self.scheme)
 
-    def instances(self, parameter_set: str, goal: str, *, doom: str = "auto") -> list[AttackInstance]:
+    def instances(self, parameter_set: str, goal: str, *, doom: str = "auto",
+                  unbalanced: str = "auto") -> list[AttackInstance]:
         if doom not in DOOM_MODES:
             raise ValueError("doom must be auto or none")
+        if unbalanced not in UNBALANCED_MODES:
+            raise ValueError("unbalanced must be auto or none")
         if goal not in GOALS:
             raise ValueError("goal must be key_recovery or msg_recovery")
         if parameter_set not in self.parameter_sets:
@@ -306,15 +343,21 @@ class HammingScheme:
             scheme=scheme, parameter_set=parameter_set,
             goal=goal, problem=problem, route=route, targets=targets, tags=tags,
             assumptions=assumptions, references=references,
+            block_profile=_block_profile(entry, goal, doom=doom),
         )]
         if composite:
             instances.append(_composite_message(entry, doom=doom))
         if mito_key:
             instances.append(_mito_parity_key(entry, instances[0]))
+        if unbalanced == "none":
+            instances = [replace(i, block_profile=None, assumptions=(*i.assumptions,
+                         "Unbalanced outer selection disabled; only total weight enters the estimator."))
+                         for i in instances]
         return instances
 
 
-def hamming_instances(*, schemes=None, parameter_sets=None, goal="both", doom="auto") -> list[AttackInstance]:
+def hamming_instances(*, schemes=None, parameter_sets=None, goal="both", doom="auto",
+                      unbalanced="auto") -> list[AttackInstance]:
     """Select all candidate routes; reject incompatible filters before costing."""
     selected = tuple(HAMMING_SCHEMES if schemes is None else schemes)
     if not selected:
@@ -330,4 +373,5 @@ def hamming_instances(*, schemes=None, parameter_sets=None, goal="both", doom="a
         raise ValueError("goal must be key_recovery, msg_recovery or both")
     goals = GOALS if goal == "both" else (goal,)
     return [instance for adapter in adapters for name in adapter.parameter_sets if name in wanted
-            for selected_goal in goals for instance in adapter.instances(name, selected_goal, doom=doom)]
+            for selected_goal in goals for instance in adapter.instances(
+                name, selected_goal, doom=doom, unbalanced=unbalanced)]

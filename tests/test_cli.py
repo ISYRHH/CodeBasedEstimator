@@ -1,13 +1,21 @@
 """Exercise CLI records, algorithm selection and DOOM context end to end."""
 
+import csv
+from dataclasses import asdict, replace
+import io
 import json
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from cryptographic_estimators.SDEstimator import SDEstimator
 
-from codebased_estimator.__main__ import main
+from codebased_estimator import AttackInstance, BlockProfile, Options, Problem, estimate
+from codebased_estimator.__main__ import _csv_results, _table, main
+from codebased_estimator.hamming import hamming_instances
 from codebased_estimator.quantum import QuantumModel
 
 
@@ -245,3 +253,69 @@ def test_cli_reports_unknown_quantum_algorithm(attack_file, capsys):
               "--quantum-algorithms", "QUnknown", "--json"])
     assert exc.value.code == 2
     assert "QUnknown" in capsys.readouterr().err
+
+
+def _json_normalized(value):
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def test_profile_api_roundtrip_matches_fresh_cli_process(tmp_path):
+    attack = AttackInstance("profile replay", "key_recovery",
+        Problem("sd", {"n": 24, "k": 12, "w": 4}, 0), targets=6,
+        tags=("doom:qcsd",), block_profile=BlockProfile((12, 12), (1, 3)))
+    algorithms = ("Prange", "Stern", "Dumer", "BallCollision", "BothMay", "BJMMplus",
+                  "BJMM", "MayOzerov", "BJMMdw", "BJMMpdw", "MAGE-Stern")
+    options = Options(classical_algorithms=algorithms, quantum_algorithms=("QSS", "QMMT+"))
+    source = _json_normalized(asdict(attack))
+    expected = _json_normalized(estimate(attack, options=options).to_dict())
+    replayed = _json_normalized(estimate(AttackInstance.from_dict(source), options=options).to_dict())
+    assert _json_normalized(asdict(attack)) == source
+    path = tmp_path/"instance.json"
+    path.write_text(json.dumps(source))
+    process = subprocess.run([sys.executable, "-m", "codebased_estimator", "estimate", str(path),
+        "--classical-algorithms", *algorithms, "--quantum-algorithms", "QSS", "QMMT+", "--json"],
+        cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, check=True, timeout=60)
+    actual, = json.loads(process.stdout)
+    for field in ("instance", "options", "results", "conclusions"):
+        assert actual[field] == expected[field] == replayed[field]
+
+
+def test_profile_qccf_output_uses_selected_codewords(capsys):
+    attack = AttackInstance("QCCF profile", "key_recovery",
+        Problem("cfp", {"n": 20, "k": 10, "w": 3}), targets=6, tags=("doom:qccf",),
+        block_profile=BlockProfile((10, 10), (0, 3), ((0, 1), (1, 0))))
+    report = estimate(attack, options=Options(
+        classical_algorithms=("Prange", "MAGE-Stern"), quantum_algorithms=()))
+    assert all(row.metadata["doom"]["active_codewords"] == 3 for row in report.results)
+    _csv_results([report])
+    rows = list(csv.DictReader(io.StringIO(capsys.readouterr().out)))
+    assert all(row["targets"] == "6" and row["effective_targets"] == "3" for row in rows)
+    _table([report], brief=False)
+    assert "Codewords used: Prange=3, MAGE-Stern=3" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["auto", "none"])
+def test_catalogue_profiles_match_cli_route_export(mode, capsys):
+    assert main(["hamming", "--list-routes", "--unbalanced", mode, "--json"]) == 0
+    actual = json.loads(capsys.readouterr().out)
+    expected = hamming_instances(unbalanced=mode)
+    assert len(actual) == len(expected) == 117
+    for row, attack in zip(actual, expected):
+        assert row["name"] == attack.name
+        assert row["problem"] == _json_normalized(asdict(attack.problem))
+        assert row["block_profile"] == (attack.block_profile.to_dict() if attack.block_profile else None)
+
+
+def test_cli_disabled_profile_matches_python_baseline(tmp_path, capsys):
+    attack = AttackInstance("profile baseline", "key_recovery",
+        Problem("sd", {"n": 24, "k": 12, "w": 4}, 0),
+        block_profile=BlockProfile((12, 12), (1, 3)))
+    path = tmp_path/"instance.json"
+    path.write_text(json.dumps(asdict(attack)))
+    assert main(["estimate", str(path), "--classical-algorithms", "Dumer", "--quantum-algorithms",
+                 "QMMT+", "--unbalanced", "none", "--json"]) == 0
+    actual, = json.loads(capsys.readouterr().out)
+    expected = _json_normalized(estimate(replace(attack, block_profile=None), options=Options(
+        classical_algorithms=("Dumer",), quantum_algorithms=("QMMT+",))).to_dict())
+    assert actual["instance"]["block_profile"] is None
+    assert actual["results"] == expected["results"]

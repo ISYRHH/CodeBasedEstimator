@@ -86,10 +86,11 @@ def _tree_seeds(n, k, w):
 
 
 class _Search:
-    def __init__(self, n, k, w, targets, bound, codewords=None):
+    def __init__(self, n, k, w, targets, bound, codewords=None, block_profile=None):
         self.n, self.k, self.w = n, k, w
         self.targets, self.bound = targets, bound
         self.codewords = codewords
+        self.block_profile = block_profile
         self.cache, self.batch_caps = {}, {}
         self.best = None
         self.cache_hits = 0
@@ -111,6 +112,7 @@ class _Search:
             blocks=blocks, repetitions=repetitions, targets=targets,
             memory_bound_log2_bits=self.bound,
             codewords=self.codewords,
+            block_profile=self.block_profile,
         )
         self.cache[key] = result
         if result is not None and (self.best is None
@@ -287,8 +289,8 @@ class _Search:
 
 
 @lru_cache(maxsize=128)
-def _optimize(n, k, w, targets, memory_bound_log2_bits, codewords=None):
-    search = _Search(n, k, w, targets, memory_bound_log2_bits, codewords)
+def _optimize(n, k, w, targets, memory_bound_log2_bits, codewords=None, block_profile=None):
+    search = _Search(n, k, w, targets, memory_bound_log2_bits, codewords, block_profile)
     limit = min(INITIAL_P_LIMIT, k//2, w)
     initial_ps = sorted(set(range(1, min(8, limit)+1)) | {value for value in (10, 12) if value <= limit})
     one_level = []
@@ -377,11 +379,20 @@ def _optimize(n, k, w, targets, memory_bound_log2_bits, codewords=None):
             "codeword_count": codewords,
             "target_batch_search": "not applicable: one zero syndrome, all codewords enter the outer probability",
         })
+    if block_profile is not None:
+        statistics["unbalanced"] = {
+            "model": "block-profile-first-transition-tree-v1",
+            "allocation_search": "deterministic integer quota seeds and three-scale pairwise descent; exhaustive for two blocks when one length is at most 128",
+            "global_optimum": False,
+            "objective": "whole-tree survival, not an added one-level exponent",
+            "scope": "first pivot transition only; remaining coordinates are uniformly shuffled",
+            "uniform_first_transition_retained": True,
+        }
     return replace(replay, search=statistics)
 
 
 def optimize(n, k, w, *, algorithm="MAGE-Stern", targets=1,
-             memory_bound_log2_bits=None, codewords=None) -> MageCost | None:
+             memory_bound_log2_bits=None, codewords=None, block_profile=None) -> MageCost | None:
     """Return a replayable heuristic tree for binary decoding or QCCF proxies.
 
     ``targets`` counts available syndromes, each with one accepted solution.
@@ -401,8 +412,14 @@ def optimize(n, k, w, *, algorithm="MAGE-Stern", targets=1,
         return None
     if codewords is not None and (type(codewords) is not int or codewords < 1 or targets != 1):
         return None
+    if block_profile is not None:
+        from .unbalanced import BlockProfile
+
+        if isinstance(block_profile, dict):
+            block_profile = BlockProfile(**block_profile)
+        block_profile.validate(n, w)
     bound = memory_bound_log2_bits
     if bound is not None and (isinstance(bound, bool) or not isinstance(bound, (int, float))
                               or not isfinite(bound) or bound < 0):
         return None
-    return deepcopy(_optimize(n, k, w, targets, bound, codewords))
+    return deepcopy(_optimize(n, k, w, targets, bound, codewords, block_profile))

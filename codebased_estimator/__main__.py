@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import AttackInstance, DemoScheme, Options, estimate
 from .comparison import compare_routes
-from .hamming import (DEFAULT_HAMMING_ALGORITHMS, DOOM_MODES, HAMMING_SCHEMES,
+from .hamming import (DEFAULT_HAMMING_ALGORITHMS, DOOM_MODES, HAMMING_SCHEMES, UNBALANCED_MODES,
                       hamming_catalogue, hamming_instances)
 from .models import QUANTUM_ALGORITHMS
 from .matrix_costs import DEFAULT_MATRIX_PROFILE, MATRIX_PROFILES
@@ -53,7 +53,8 @@ def _csv_results(reports, comparisons=()):
                 "doom": ",".join(instance.tags), "targets": instance.targets,
                 "active_targets": doom.get("active_targets", ""),
                 "effective_doom": ",".join(row.metadata.get("effective_tags", instance.tags)),
-                "effective_targets": row.metadata.get("effective_targets", doom.get("active_targets", instance.targets)),
+                "effective_targets": row.metadata.get("effective_targets", doom.get(
+                    "active_targets", doom.get("active_codewords", instance.targets))),
             })
 
 
@@ -97,6 +98,7 @@ def _hamming_routes(instances, *, as_json=False):
             "name": i.name, "route_id": i.route_id, "route": i.route,
             "problem": asdict(i.problem), "tags": list(i.tags), "targets": i.targets,
             "cost_proxy": i.cost_proxy,
+            "block_profile": i.block_profile.to_dict() if i.block_profile else None,
         } for i in instances]
         print(json.dumps(records, indent=2, ensure_ascii=False, allow_nan=False))
         return
@@ -138,6 +140,8 @@ def _table(reports, *, brief=True):
         print(f"\n{i.name} | {i.goal} | {i.problem.kind} {i.problem.parameters}")
         if not brief and i.route:
             print(f"  Route: {i.route}")
+        if not brief and i.block_profile is not None:
+            print(f"  Block profile: lengths={list(i.block_profile.lengths)}; weights={list(i.block_profile.weights)}")
         print(f"  tags={list(i.tags)}; targets={i.targets}")
         if not brief and i.problem.kind == "sd":
             solutions = i.problem.log2_solutions
@@ -169,6 +173,14 @@ def _table(reports, *, brief=True):
             ]
             if used_targets:
                 print(f"  Targets used: {', '.join(used_targets)}")
+            used_codewords = [
+                f"{r.algorithm}={r.metadata['doom']['active_codewords']}"
+                for r in report.results
+                if r.status == "computed"
+                and r.metadata.get("doom", {}).get("active_codewords") not in (None, i.targets)
+            ]
+            if used_codewords:
+                print(f"  Codewords used: {', '.join(used_codewords)}")
         if report.options.memory_bound_log2_bits is not None and any(
             r.is_time_only_quantum for r in report.results
         ):
@@ -218,6 +230,8 @@ def main(argv=None) -> int:
     hamming.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
     hamming.set_defaults(targets=None, log2_solutions=None)
     for command in (demo, run, hamming):
+        command.add_argument("--unbalanced", choices=UNBALANCED_MODES, default="auto",
+                             help="auto: use supplied block weights in supported outer probabilities; none: total-weight baseline")
         command.add_argument("--brief", action=argparse.BooleanOptionalAction, default=True,
                              help="compact text (default: on); --no-brief adds route, input details and parameter sources; JSON/CSV unchanged")
         command.add_argument("--classical-algorithms", nargs="*", help="classical names; default: all candidates for the problem family (demo uses a small selection); empty disables classical")
@@ -245,7 +259,8 @@ def main(argv=None) -> int:
                     for instance in adapter.instances(family, goal)]
         elif args.command == "hamming":
             instances = hamming_instances(schemes=args.schemes,
-                                          parameter_sets=args.parameter_sets, goal=args.goal, doom=args.doom)
+                                          parameter_sets=args.parameter_sets, goal=args.goal,
+                                          doom=args.doom, unbalanced=args.unbalanced)
             if args.all_classical and args.classical_algorithms is not None:
                 raise ValueError("--all-classical and --classical-algorithms are mutually exclusive")
             if args.csv and args.details:
@@ -281,6 +296,8 @@ def main(argv=None) -> int:
             if args.command == "hamming" and args.progress:
                 print(f"[{index}/{len(jobs)}] {instance.name}", file=sys.stderr, flush=True)
             changes = {}
+            if args.unbalanced == "none":
+                changes["block_profile"] = None
             if args.command != "hamming" and args.doom is not None:
                 existing = tuple(tag for tag in instance.tags if tag.startswith("doom:"))
                 tag = f"doom:{args.doom}"

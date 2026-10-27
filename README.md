@@ -33,6 +33,8 @@ python3 -m venv .venv
 
 默认运行已注册的经典与量子候选；算法选项后留空可关闭该类别。`hamming` 默认 `--doom auto`，`--doom none` 关闭多目标。更多筛选与成本选项见各子命令的 `--help`。
 
+已知各块重量的路线默认启用 `--unbalanced auto`，修正外层成功概率并重新优化；`--unbalanced none` 使用总重量基线。适用范围见[外层块概率](docs/model.md#unbalanced-外层块概率)。
+
 ## 输出
 
 - 时间／内存为 log₂ 值；经典单位为位操作／bits，量子时间为 `quantum_bit_operations`，量子内存未估计。结果是所选路线的模型成本，不代表设备耗时或方案安全位数。
@@ -49,7 +51,7 @@ reports = [estimate(instance, options=options) for instance in instances]
 print(compare_routes(reports)[0].to_dict())
 ```
 
-自定义输入使用 `AttackInstance.from_dict(...)`。路线比较仅覆盖已估计的候选。
+自定义输入使用 `AttackInstance.from_dict(...)`；二元实例可添加 `"block_profile": {"lengths": [100, 100], "weights": [12, 4]}`，长度与重量分别合计为 `n`、`w`。Python API 提供 `BlockProfile`，`hamming_instances(unbalanced="none")` 可关闭块概率。路线比较仅覆盖已估计的候选。
 
 ## 测试
 

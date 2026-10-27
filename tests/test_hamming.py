@@ -203,7 +203,7 @@ def test_missing_key_reductions_remain_unavailable(scheme, parameter_set, doom):
     ("UVW-KEM", "UVW-KEM-128", "msg_recovery", "SDFq"),
 ])
 def test_real_prange_costs_match_direct_upstream_solution_counts(scheme, parameter_set, goal, family, doom):
-    attack = HammingScheme(scheme).instances(parameter_set, goal, doom=doom)[0]
+    attack = HammingScheme(scheme).instances(parameter_set, goal, doom=doom, unbalanced="none")[0]
     report = estimate(attack, options=Options(classical_algorithms=("Prange",),
                                               quantum_algorithms=()))
     result = report.results[0]
