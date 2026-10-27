@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Code-based decoding cost estimator.">
+  <title>CodeBased Estimator</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header container">
+    <div class="site-identity">
+      <a class="brand" href="#workspace" aria-label="CodeBased home">CodeBased</a>
+      <p>Decoding cost estimator</p>
+    </div>
+    <nav class="site-nav" aria-label="Main navigation">
+      <button class="nav-item active" data-view="workspace" aria-current="page">Estimator</button>
+      <button class="nav-item" data-view="catalogue">Parameters</button>
+      <button class="nav-item" data-view="history">History</button>
+      <button class="nav-item" data-view="guide">Notes</button>
+    </nav>
+  </header>
+  <main id="main" class="container">
+    <section id="view-workspace" class="view">
+      <div class="page-heading">
+        <h1>Estimator</h1>
+        <button class="text-button" id="load-example">Load example</button>
+      </div>
+      <section class="configuration" aria-label="Configuration">
+        <form id="estimate-form">
+          <fieldset id="configuration-fields">
+            <div class="segmented" aria-label="Instance source">
+              <button type="button" class="selected" data-mode="catalogue" aria-pressed="true">Built-in parameters</button>
+              <button type="button" data-mode="custom" aria-pressed="false">Custom instance</button>
+            </div>
+            <div id="catalogue-fields">
+              <label for="scheme">Scheme</label>
+              <select id="scheme" name="scheme" required><option value="">Loading…</option></select>
+              <label for="parameter-set">Parameter set</label>
+              <select id="parameter-set" name="parameter_set" required></select>
+              <div class="scope-field">
+                <label for="evaluation-scope">Evaluate</label>
+                <select id="evaluation-scope"><option value="parameter_set">Selected parameter set</option><option value="scheme">All parameter sets in this scheme</option></select>
+              </div>
+              <details class="source-preview">
+                <summary>Source parameters <span class="muted" id="source-count"></span></summary>
+                <div id="source-parameters" class="parameter-chips"></div>
+              </details>
+            </div>
+            <div id="custom-fields" hidden>
+              <div class="label-row"><label for="custom-name">Instance name</label><button class="text-button" type="button" id="import-button">Import JSON</button></div>
+              <input id="custom-name" value="custom-sd" maxlength="120" required>
+              <label for="problem-kind">Problem family</label>
+              <select id="problem-kind">
+                <option value="sd">Syndrome decoding (SD)</option>
+                <option value="qcsd">Multiple targets (QCSD)</option>
+                <option value="qccf">Codeword finding (QCCF)</option>
+                <option value="rank_sd">Rank syndrome decoding</option>
+              </select>
+              <div class="input-grid">
+                <div><label for="param-n">Code length n</label><input id="param-n" type="number" min="2" step="1" value="40" required></div>
+                <div><label for="param-k">Dimension k</label><input id="param-k" type="number" min="1" step="1" value="20" required></div>
+                <div id="weight-field"><label for="param-w">Weight w</label><input id="param-w" type="number" min="1" step="1" value="4" required></div>
+                <div><label for="param-q">Field order q</label><input id="param-q" type="number" min="2" step="1" value="2" required></div>
+                <div class="rank-field" hidden><label for="param-m">Extension degree m</label><input id="param-m" type="number" min="2" step="1" value="12" required></div>
+                <div class="rank-field" hidden><label for="param-r">Rank weight r</label><input id="param-r" type="number" min="1" step="1" value="3" required></div>
+              </div>
+              <div id="target-field" hidden><label for="targets">Usable targets M</label><input id="targets" type="number" min="1" step="1" value="8" required><p class="field-hint" id="target-hint"></p></div>
+              <div id="solutions-field"><label for="solutions">Solutions per syndrome (log₂)</label><input id="solutions" type="number" min="0" step="any" placeholder="Automatic" value="0"></div>
+              <details class="json-editor">
+                <summary>Edit instance JSON</summary>
+                <textarea id="instance-json" rows="10" aria-label="Full attack instance JSON" spellcheck="false"></textarea>
+                <button class="button secondary" type="button" id="apply-json">Apply JSON</button>
+              </details>
+              <p class="inline-note" id="import-note" hidden>Imported fields are preserved.</p>
+            </div>
+            <div class="goal-field">
+              <label for="goal">Recovery goal</label>
+              <select id="goal"><option value="key_recovery">Key recovery</option><option value="msg_recovery">Message recovery</option><option value="both">Both</option></select>
+            </div>
+            <div class="algorithms-section">
+              <div class="label-row"><h2>Algorithms</h2><span class="muted" id="algorithm-count">1 selected</span></div>
+              <div class="algorithm-families"><div class="algorithm-family"><div class="algorithm-heading"><h3>Classical</h3><button class="text-button" type="button" id="select-classical">Select all</button><button class="text-button" type="button" id="clear-classical">Clear</button></div>
+              <div class="algorithm-options" id="classical-algorithms"></div>
+              </div><div class="algorithm-family"><div class="algorithm-heading"><h3>Quantum</h3><button class="text-button" type="button" id="select-quantum">Select all</button><button class="text-button" type="button" id="clear-quantum">Clear</button></div>
+              <div class="algorithm-options" id="quantum-algorithms"></div>
+              <p class="field-hint">Time estimates only. QPrange is not implemented.</p></div></div>
+              <p class="field-hint" id="availability-note" aria-live="polite"></p>
+            </div>
+            <details class="advanced">
+              <summary>Model options</summary>
+              <div class="options-grid">
+                <div id="doom-field"><label for="doom">DOOM</label><select id="doom"><option value="auto">Automatic</option><option value="none">Single target</option></select></div>
+                <div><label for="unbalanced">Block weights</label><select id="unbalanced"><option value="auto">Use where supported</option><option value="none">Total-weight baseline</option></select></div>
+                <div><label for="memory-bound">Classical memory limit (log₂ bits)</label><input id="memory-bound" type="number" min="0" step="any" placeholder="No limit"></div>
+                <div><label for="matrix-profile">Quantum matrix model</label><select id="matrix-profile"></select></div>
+              </div>
+            </details>
+          </fieldset>
+          <div id="form-error" class="error-message" role="alert" hidden></div>
+          <div class="run-actions">
+            <button type="submit" class="button primary" id="run-button" disabled><span>Run estimation</span></button>
+            <button type="button" class="button secondary" id="cancel-button" hidden>Cancel</button>
+            <button type="button" class="text-button" id="reset-form">Reset</button>
+          </div>
+        </form>
+      </section>
+      <section class="results-panel" aria-labelledby="results-heading">
+        <div class="panel-heading"><h2 id="results-heading">Results</h2><span class="badge neutral" id="result-status">Ready</span></div>
+        <div class="result-toolbar" id="result-toolbar" hidden>
+          <div><strong id="run-title"></strong><small id="run-meta"></small></div>
+          <div class="export-actions"><button class="text-button" id="export-json">Download JSON</button><button class="text-button" id="export-csv">Download CSV</button></div>
+        </div>
+        <div id="job-progress" class="job-progress" role="status" hidden>
+          <div><span class="spinner"></span><strong id="progress-title">Estimating…</strong><span id="elapsed">0s</span></div>
+          <progress id="progress-bar" max="1"></progress><p id="progress-detail">Searching algorithm parameters.</p>
+        </div>
+        <div id="empty-results" class="empty-results"><p>No results yet.</p></div>
+        <div id="completed-results" hidden>
+          <div class="result-summary" id="result-summary"></div>
+          <div class="result-tabs" role="tablist" aria-label="Result view">
+            <button class="selected" role="tab" aria-selected="true" aria-controls="tab-comparison" id="result-tab-comparison" data-result-tab="comparison">Results</button>
+            <button role="tab" tabindex="-1" aria-selected="false" aria-controls="tab-details" id="result-tab-details" data-result-tab="details">Details</button>
+          </div>
+          <div id="tab-comparison" role="tabpanel" aria-labelledby="result-tab-comparison">
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Algorithm results">
+              <table class="results-table"><thead><tr><th scope="col">Algorithm / route</th><th scope="col">Status</th><th scope="col">Time (log₂)</th><th scope="col">Memory (log₂)</th></tr></thead><tbody id="results-body"></tbody></table>
+            </div>
+            <details class="chart-section"><summary>Time comparison chart</summary><div id="cost-charts"></div></details>
+          </div>
+          <div id="tab-details" role="tabpanel" aria-labelledby="result-tab-details" hidden></div>
+        </div>
+        <p class="results-footnote">Model costs, not security levels. Classical and quantum units differ; quantum memory is not estimated.</p>
+      </section>
+      <details class="route-preview">
+        <summary>Recovery routes <span class="muted" id="route-count"></span></summary>
+        <div id="route-preview-content"></div>
+      </details>
+    </section>
+    <section id="view-catalogue" class="view" hidden>
+      <h1>Parameters</h1>
+      <div class="library-toolbar"><label class="search-label" for="library-search">Search<input id="library-search" type="search" placeholder="Scheme or parameter set"></label><span class="muted" id="library-count"></span></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Parameter library"><table class="library-table"><thead><tr><th scope="col">Parameter set</th><th scope="col">Scheme</th><th scope="col">Source parameters</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead><tbody id="library-body"></tbody></table></div>
+    </section>
+    <section id="view-history" class="view" hidden>
+      <div class="page-heading"><h1>History</h1><button class="text-button" id="clear-history">Clear history</button></div>
+      <p class="muted">Last 10 completed runs, stored in this browser.</p><div id="history-list"></div>
+    </section>
+    <section id="view-guide" class="view" hidden>
+      <h1>Model notes</h1>
+      <dl class="model-notes">
+        <dt>Scope</dt><dd>Results cover the selected recovery routes and algorithms, not whole-scheme security.</dd>
+        <dt>Units</dt><dd>All costs are log₂ values. Classical time uses bit operations and memory uses bits. Quantum time uses quantum bit operations; quantum memory is not estimated.</dd>
+        <dt>Targets</dt><dd>QCSD counts syndrome targets. QCCF counts acceptable nonzero codewords; omit solutions per syndrome for QCCF.</dd>
+        <dt>Minimum cost</dt><dd>Minima include only evaluated, eligible candidates within the same cost family and units. Classical memory limits do not apply to time-only quantum estimates.</dd>
+        <dt>Assumptions</dt><dd>Open a route or result's details for its model assumptions, sources, and algorithm parameters. JSON exports preserve the complete report.</dd>
+      </dl>
+    </section>
+  </main>
+  <footer class="site-footer container"><p>CodeBased Estimator</p><div class="connection" id="connection" role="status"><span class="status-dot"></span><span>Connecting…</span></div></footer>
+  <input type="file" id="json-file" accept="application/json,.json" hidden>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
