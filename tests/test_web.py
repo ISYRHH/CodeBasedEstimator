@@ -121,10 +121,13 @@ def test_http_runs_real_estimator_and_returns_comparisons(tmp_path):
         assert status == 200 and unchanged["status"] == "completed"
 
 
-def test_http_qprange_job_matches_the_shared_backend(tmp_path):
+@pytest.mark.parametrize("block", [False, True])
+def test_http_qprange_job_matches_the_shared_backend(tmp_path, block):
     from codebased_estimator import estimate
 
     body = custom_request(options={"classical_algorithms": [], "quantum_algorithms": ["QPrange"]})
+    if block:
+        body["instance"]["block_profile"] = {"lengths": [20, 20], "weights": [1, 3]}
     instances, options = prepare_job(body)
     expected, = estimate(instances[0], options=options).results
     with running_server(tmp_path) as server:
@@ -139,6 +142,8 @@ def test_http_qprange_job_matches_the_shared_backend(tmp_path):
         assert result["time_log2"] == expected.time_log2
         assert result["time_unit"] == "quantum_bit_operations"
         assert result["memory_log2"] is None and result["memory_unit"] == "not_estimated"
+        if block:
+            assert result["metadata"]["unbalanced"] == json.loads(json.dumps(expected.metadata["unbalanced"]))
 
 
 def test_qprange_preflight_stops_before_finite_cost_evaluation(monkeypatch):
@@ -153,6 +158,20 @@ def test_qprange_preflight_stops_before_finite_cost_evaluation(monkeypatch):
     body["instance"].update(tags=["doom:qccf"])
     body["instance"]["problem"]["kind"] = "cfp"
     body["instance"]["problem"].pop("log2_solutions")
+    assert not availability_for(body)["quantum"]["QPrange"]["available"]
+
+
+def test_block_qprange_preflight_retains_native_profile_and_guards(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Preflight evaluated block QPrange finite costs")
+
+    monkeypatch.setattr("codebased_estimator.qprange.evaluate_qprange", forbidden)
+    body = custom_request(options={"classical_algorithms": [], "quantum_algorithms": ["QPrange"]})
+    body["instance"]["block_profile"] = {"lengths": [20, 20], "weights": [1, 3]}
+    assert availability_for(body)["quantum"]["QPrange"]["available"]
+    body["instance"].update(tags=["doom:qcsd"], targets=8)
+    assert availability_for(body)["quantum"]["QPrange"]["available"]
+    body["instance"]["structure"] = ["truncated"]
     assert not availability_for(body)["quantum"]["QPrange"]["available"]
 
 
