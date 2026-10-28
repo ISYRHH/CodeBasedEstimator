@@ -138,7 +138,7 @@ class QuantumModel:
                 "G_Q_direct_check": "log2 vector_operations", "T0": "log2 bit_operations",
                 "amplitude_budget": "log2 normalized amplification budget; not exact integer Grover iterations"},
             "not_included": ["logical gates, circuit depth and qubits", "physical error correction",
-                             "QC/DOOM speedup", "block profiles or structured-matrix rank",
+                             "QC/DOOM speedup", "actual structured-matrix rank",
                              "per-matrix runtime or security lower bound"],
         }
         assumptions = (
@@ -148,9 +148,6 @@ class QuantumModel:
             assumptions += ("Solution successes are independent conditional on the common rank event.",)
         if instance.block_profile is not None:
             metadata["unbalanced"] = dict(cost.unbalanced)
-            metadata["not_included"] = [
-                "block-dependent structured-matrix rank" if item == "block profiles or structured-matrix rank"
-                else item for item in metadata["not_included"]]
             assumptions += (BLOCK_OUTER, BLOCK_SOLUTIONS)
         if options.quantum_matrix_profile == M4RI_MATRIX_PROFILE and cost.matrix.get("block_size", 0):
             assumptions += ("M4RI assumes coherent row-table lookup and aggregate cleanup costs.",)

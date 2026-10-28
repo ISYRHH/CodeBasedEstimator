@@ -1,6 +1,14 @@
-# 通用 QPrange
+# QPrange
 
-本增量只把现有 `QSS` 的 `ell=p=0` 直接点暴露为 `QPrange`。准备、消元、检查、逆算、随机满行秩集合概率和显式多解代理全部复用 `quantum_costs.evaluate_parameters`；没有另造成本内核，也不是把经典总费用指数除以二。
+QPrange 使用现有 `QSS` 模型的 `ell=p=0` 直接点，通过 `quantum_costs.evaluate_parameters` 计算。准备、消元、核查、逆算、随机满行秩集合概率和显式多解代理均采用项目共同模型。
+
+固定点的抽象时间为
+
+$$
+T=T_0+\frac{n(G+1)}{\sqrt{\rho[1-(1-P)^L]}}.
+$$
+
+其中 $P$ 是外层支撑命中概率，$\rho$ 是共同秩条件概率，$L$ 是每综合征的解数；省略解数时取 $L=1$。$G$ 为共同准备与消元预算，$1$ 沿用直接分支的归一化核查价格，$T_0$ 为一次性成本。多解并集沿用给定共同秩事件后命中独立的代理。
 
 ```sh
 .venv/bin/python -m codebased_estimator estimate examples/instance.json \
@@ -13,7 +21,7 @@
 
 ## 已知块重
 
-QPrange 直接接受项目已有 `block_profile`，将它传入同一个 `evaluate_parameters` 固定点；不新增分块输入格式或概率实现。各块配额、有限成功概率及其在解数并集之前的位置均由原生外层模型计算。不会再额外乘一次块收益、秩概率，或另加旧原型中的逐块检查价格。
+已知块重量通过 `block_profile` 输入同一个固定点。各块配额与有限命中概率由项目外层模型计算，再进入解数并集；秩、准备和核查保持共同预算。
 
 ```sh
 .venv/bin/python -m codebased_estimator estimate examples/qprange_block_profile.json \
@@ -22,6 +30,6 @@ QPrange 直接接受项目已有 `block_profile`，将它传入同一个 `evalua
 
 例如块长 `(6,6)`、块重 `(1,3)`、`n-k=6`，原生 Prange 配额的支持命中概率为 `1/12`。这是支持事件，不是实际 QC 矩阵的联合可逆成功率；随机秩、准备和核查仍采用项目共同抽象预算。显式多解计数必须只包含满足同一块画像的解。
 
-Hamming 路线默认已有块画像，因而现在可直接用于此类 qPrange 参考；`--unbalanced none` 保留总重量基线。QCSD 的单目标回退保留画像，但不计量子 DOOM 收益。`metadata.unbalanced` 给出原生模型、尾区配额和概率，`computed` 只表示该项目时间模型已求值，不代表完整候选攻击或安全等级认证。原有 QSS/QMMT+ 和经典算法不改。
+提供已知块重量的 Hamming 路线默认携带块画像；`--unbalanced none` 使用总重量基线。QCSD 的单目标回退保留画像，但不计量子 DOOM 收益。`metadata.unbalanced` 给出模型、尾区配额和概率；`computed` 表示该项目时间模型已求值，不代表完整候选攻击或安全等级认证。
 
-默认量子算法名称和顺序保持原样。对于本阶段支持的无块输入，QPrange 由占位变为可计算并参与同单位择优，默认最佳量子结果可能改变。显式只选择原有算法时，结果应保持不变。
+QPrange 与 QSS、QMMT+ 按同一量子时间单位参与择优，只比较实际请求且可计算的算法。
