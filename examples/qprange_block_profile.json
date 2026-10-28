@@ -1,0 +1,10 @@
+{
+  "name": "QPrange native block-profile example",
+  "goal": "msg_recovery",
+  "problem": {
+    "kind": "sd",
+    "parameters": {"n": 12, "k": 6, "w": 4, "q": 2},
+    "log2_solutions": 0
+  },
+  "block_profile": {"lengths": [6, 6], "weights": [1, 3]}
+}
