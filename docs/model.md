@@ -7,7 +7,7 @@
 | 后端 | 支持范围 | 时间／内存单位 |
 |---|---|---|
 | 经典 | CE 2.1.1 的二元 SD、多元 SD、Rank SD，以及本地 MAGE-Stern | `bit_operations`／`bits` |
-| 量子 | 二元 SD 的 QSS、QMMT+；QPrange 尚未实现 | `quantum_bit_operations`／未估计 |
+| 量子 | 二元 SD 的 QSS、QMMT+，以及不带块画像的通用 QPrange | `quantum_bit_operations`／未估计 |
 
 输出均为 $\log_2$。经典采用有限参数、位复杂度和常数内存访问计价；`--memory-bound` 仅约束经典。量子采用抽象相干访问预算，不是完整电路门数或设备运行时间。未知标签及额外 `structure` 不会被通用后端忽略；`cost_proxy` 只记录路线近似的来源。
 
@@ -61,6 +61,8 @@ QCSD 联合优化树参数及 $u$；QCCF 固定 $u=1$，使用的 $M$ 个码字�
 两种并集公式均假设不同目标的整树失败事件独立，无须 $uS\ll1$。QCCF 的 $S_{\rm cw}$ 仍是随机重量支撑代理，并非满秩条件下真实码字分布的精确概率。实现采用 CE 基本操作价格，未复现论文的逻辑门 RAM 与稀疏存储模型。固定点评估、树搜索和批量优化分别见 [mage_costs.py](../codebased_estimator/mage_costs.py)、[mage_search.py](../codebased_estimator/mage_search.py)、[mage_targets.py](../codebased_estimator/mage_targets.py)。
 
 ## 量子成本
+
+通用 [QPrange](qprange.md) 复用下述量子模型的 `ell=p=0` 直接点，不运行参数搜索。二元 QCSD 沿用单目标回退；非零码字 QCCF 和块画像暂不支持，输入不会被默默忽略。原算法名称列表不变，但支持范围内的 QPrange 由占位变为可计算，会参与量子择优。
 
 QSS/QMMT+ 依 [Kachigar–Tillich §4–5](https://arxiv.org/abs/1703.00263v2) 优化直接、完整列表与量子游走分支。设 $P$ 为重量命中概率、$\sigma$ 为表示存活代理、$\rho$ 为共同秩条件概率、$L$ 为每综合征解数：
 

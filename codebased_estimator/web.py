@@ -176,7 +176,7 @@ def _availability_models():
     Classical dispatch reaches an upstream constructor only after its tag,
     structure and family checks. Constructors reject inapplicable parameter
     combinations but do not optimize. MAGE has its own solution-count guard.
-    Quantum dispatch has a single finite-cost entry point that can be stopped.
+    Quantum dispatch stops before either finite-cost entry point is evaluated.
     """
     from .backend import ClassicalModel
     from .quantum import QuantumModel
@@ -217,6 +217,9 @@ def _availability_models():
 
     class QuantumProbe(QuantumModel):
         def _estimate_time(self, *args, **kwargs):
+            raise _AvailableAlgorithm
+
+        def _estimate_prange(self, *args, **kwargs):
             raise _AvailableAlgorithm
 
     return {"classical": ClassicalProbe(), "quantum": QuantumProbe()}

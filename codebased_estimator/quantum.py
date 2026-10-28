@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from math import log2
+from math import isfinite, log2
 
 from .assumptions import BLOCK_OUTER, BLOCK_SOLUTIONS
 from .models import AttackInstance, Estimate, Options, Problem, QUANTUM_ALGORITHMS
@@ -47,6 +47,10 @@ class QuantumModel:
         elif problem.kind != "sd" or problem.parameters.get("q") != 2:
             status = "not_applicable"
             reason = f"{name} currently declares only binary syndrome-decoding routes."
+        elif name == "QPrange" and codeword_finding:
+            reason = "QPrange's invertible-tail direct branch yields only the zero word for a zero syndrome; nonzero-codeword search is not implemented."
+        elif name == "QPrange" and instance.block_profile is not None:
+            reason = "QPrange block-profile support is a separate incremental extension; the supplied profile is not ignored."
         elif (codeword_finding and instance.block_profile is not None
               and instance.block_profile.preserving_targets(instance.targets) != instance.targets):
             reason = (
@@ -66,6 +70,8 @@ class QuantumModel:
             reason = f"{name} has no model for structure: {', '.join(instance.structure)}."
         elif instance.targets != 1 and not codeword_finding:
             reason = f"{name} needs an explicit multi-target model and target-aware optimization."
+        elif name == "QPrange":
+            return self._estimate_prange(instance, options)
         elif name in ("QSS", "QMMT+"):
             return self._estimate_time(name, instance, options, problem=problem,
                                        codeword_finding=codeword_finding)
@@ -102,6 +108,55 @@ class QuantumModel:
         return single_target_fallback(
             baseline, instance,
             "Quantum QCSD DOOM is not implemented; using the single-target SD baseline without DOOM.",
+        )
+
+    def _estimate_prange(self, instance: AttackInstance, options: Options) -> Estimate:
+        """Expose the fixed direct point in the existing quantum time units."""
+        from .qprange import COST_MODEL as PRANGE_MODEL, evaluate_qprange
+
+        p = instance.problem.parameters
+        solutions = instance.problem.log2_solutions or 0.0
+        cost = evaluate_qprange(p["n"], p["k"], p["w"],
+            matrix_profile=options.quantum_matrix_profile, log2_solutions=solutions)
+        metadata = {
+            "tags": list(instance.tags), "targets": instance.targets,
+            "structure": list(instance.structure), "cost_model": PRANGE_MODEL,
+            "matrix_profile": options.quantum_matrix_profile,
+            "matrix": cost.matrix, "search": cost.search,
+            "cost_breakdown": {key: value if value is None or isfinite(value) else None
+                               for key, value in cost.details.items()},
+            "resource_scope": "time_only", "heuristic": True,
+            "memory_bound_log2_bits": options.memory_bound_log2_bits,
+            "memory_bound_applied": False, "effective_log2_solutions": solutions,
+            "outer_probability_model": OUTER_PROBABILITY_MODEL,
+            "solution_count_policy": ("single solution assumed for null input"
+                                      if instance.problem.log2_solutions is None else
+                                      "explicit log2 count for one syndrome"),
+            "cost_breakdown_units": {
+                "probabilities_and_counts": "log2",
+                "G_Q_direct_check": "log2 vector_operations", "T0": "log2 bit_operations",
+                "amplitude_budget": "log2 normalized amplification budget; not exact integer Grover iterations"},
+            "not_included": ["logical gates, circuit depth and qubits", "physical error correction",
+                             "QC/DOOM speedup", "block profiles or structured-matrix rank",
+                             "per-matrix runtime or security lower bound"],
+        }
+        assumptions = (
+            "Random-code rank model; abstract coherent quantum access is assumed.",
+        )
+        if solutions:
+            assumptions += ("Solution successes are independent conditional on the common rank event.",)
+        if options.quantum_matrix_profile == M4RI_MATRIX_PROFILE and cost.matrix.get("block_size", 0):
+            assumptions += ("M4RI assumes coherent row-table lookup and aggregate cleanup costs.",)
+        return Estimate(
+            algorithm="QPrange", model=self.name, status="computed",
+            time_log2=cost.time_log2, memory_log2=None,
+            time_unit="quantum_bit_operations", memory_unit="not_estimated",
+            parameters=cost.parameters,
+            reason="Abstract finite time estimate; not logical gate/depth/qubit resources; memory bound is not applied.",
+            assumptions=assumptions,
+            references=("https://cr.yp.to/codes/grovercode-20100303.pdf",
+                        "https://arxiv.org/abs/1703.00263v2"),
+            metadata=metadata,
         )
 
     def _estimate_time(self, name: str, instance: AttackInstance, options: Options, *,

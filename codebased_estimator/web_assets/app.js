@@ -85,9 +85,9 @@ function renderAlgorithms(classicalSelection, quantumSelection) {
   const other = names.filter((name) => !common.includes(name));
   const pill = (name, family, selected) => {
     const info = state.availability?.[family]?.[name];
-    const available = name !== "QPrange" && Boolean(info?.available) && !state.checkingAvailability;
-    const reason = name === "QPrange" ? "Not implemented." : state.checkingAvailability ? "Checking availability…" : info?.reason || "Availability has not been checked.";
-    const isChecked = name !== "QPrange" && selected.includes(name) && (available || state.checkingAvailability);
+    const available = Boolean(info?.available) && !state.checkingAvailability;
+    const reason = state.checkingAvailability ? "Checking availability…" : info?.reason || "Availability has not been checked.";
+    const isChecked = selected.includes(name) && (available || state.checkingAvailability);
     return `<label class="algorithm-pill${available ? "" : " unavailable"}" title="${escapeHTML(reason)}"${available ? "" : ` tabindex="0" data-reason="${escapeHTML(reason)}"`}><input type="checkbox" name="${family}-algorithm" value="${escapeHTML(name)}" ${isChecked ? "checked" : ""} ${available ? "" : "disabled"} aria-label="${escapeHTML(name + (available ? "" : `: ${reason}`))}"><span>${escapeHTML(name)}</span></label>`;
   };
   $("classical-algorithms").innerHTML = [...common,...other].map((name) => pill(name, "classical", selectedClassical)).join("");

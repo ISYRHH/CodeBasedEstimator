@@ -225,7 +225,7 @@ test("catalogue and custom field order select only the matching classical algori
   assert.equal(ui.evaluate("algorithmFamily()"), "rank");
 });
 
-test("all classical candidates including BJMM render directly; QPrange cannot be selected", () => {
+test("QPrange selection follows backend availability alongside other algorithms", () => {
   const ui = catalogueWorkspace();
   ui.evaluate(`state.availability = {
     classical: Object.fromEntries(state.catalogue.algorithm_families.binary.map(name => [name,{available:true}])),
@@ -234,9 +234,16 @@ test("all classical candidates including BJMM render directly; QPrange cannot be
   const visible = ui.get("classical-algorithms").children.map((input) => input.value);
   assert.deepEqual(visible.sort(), [...catalogue.algorithm_families.binary].sort());
   assert.deepEqual(ui.plain("selectedAlgorithms('classical')"), ["BJMM"]);
-  const pending = ui.query('input[name="quantum-algorithm"]').find((input) => input.value === "QPrange");
-  assert.equal(pending.disabled, true);
-  assert.equal(pending.checked, false);
+  const qprange = ui.query('input[name="quantum-algorithm"]').find((input) => input.value === "QPrange");
+  assert.equal(qprange.disabled, false);
+  assert.equal(qprange.checked, true);
+  assert.deepEqual(ui.plain("selectedAlgorithms('quantum')"), ["QPrange", "QSS"]);
+  assert.deepEqual(ui.plain("requestBody()").options.quantum_algorithms, ["QPrange", "QSS"]);
+  ui.evaluate(`state.availability.quantum.QPrange = {available:false, reason:'Unsupported recovery route.'};
+    renderAlgorithms()`);
+  const unavailable = ui.query('input[name="quantum-algorithm"]').find((input) => input.value === "QPrange");
+  assert.equal(unavailable.disabled, true);
+  assert.equal(unavailable.checked, false);
   assert.deepEqual(ui.plain("selectedAlgorithms('quantum')"), ["QSS"]);
 });
 

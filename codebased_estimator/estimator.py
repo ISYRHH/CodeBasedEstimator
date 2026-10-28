@@ -42,8 +42,8 @@ def estimate(
                 "implementation": "heuristic finite time estimates",
                 "cost_model": cost_model_for_profile(options.quantum_matrix_profile),
                 "matrix_profile": options.quantum_matrix_profile,
-                "implemented_algorithms": ["QSS", "QMMT+"],
-                "pending_algorithms": ["QPrange"],
+                "implemented_algorithms": ["QPrange", "QSS", "QMMT+"],
+                "pending_algorithms": [],
                 "resource_scope": "time_only",
             }
         else:

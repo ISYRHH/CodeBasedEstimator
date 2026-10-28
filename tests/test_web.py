@@ -121,6 +121,41 @@ def test_http_runs_real_estimator_and_returns_comparisons(tmp_path):
         assert status == 200 and unchanged["status"] == "completed"
 
 
+def test_http_qprange_job_matches_the_shared_backend(tmp_path):
+    from codebased_estimator import estimate
+
+    body = custom_request(options={"classical_algorithms": [], "quantum_algorithms": ["QPrange"]})
+    instances, options = prepare_job(body)
+    expected, = estimate(instances[0], options=options).results
+    with running_server(tmp_path) as server:
+        status, preview, _ = request(server, "POST", "/api/availability", body)
+        assert status == 200 and preview["availability"]["quantum"]["QPrange"]["available"]
+        status, started, _ = request(server, "POST", "/api/jobs", body)
+        assert status == 202
+        job = wait_for_job(server, started["id"])
+        assert job["status"] == "completed", job
+        result, = job["reports"][0]["results"]
+        assert result["algorithm"] == "QPrange" and result["status"] == "computed"
+        assert result["time_log2"] == expected.time_log2
+        assert result["time_unit"] == "quantum_bit_operations"
+        assert result["memory_log2"] is None and result["memory_unit"] == "not_estimated"
+
+
+def test_qprange_preflight_stops_before_finite_cost_evaluation(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Preflight evaluated QPrange finite costs")
+
+    monkeypatch.setattr("codebased_estimator.qprange.evaluate_qprange", forbidden)
+    body = custom_request(options={"classical_algorithms": [], "quantum_algorithms": ["QPrange"]})
+    assert availability_for(body)["quantum"]["QPrange"]["available"]
+    body["instance"].update(tags=["doom:qcsd"], targets=8)
+    assert availability_for(body)["quantum"]["QPrange"]["available"]
+    body["instance"].update(tags=["doom:qccf"])
+    body["instance"]["problem"]["kind"] = "cfp"
+    body["instance"]["problem"].pop("log2_solutions")
+    assert not availability_for(body)["quantum"]["QPrange"]["available"]
+
+
 def test_both_goals_preview_and_job_keep_distinct_comparisons(tmp_path):
     selected = next(row for row in catalogue()["parameter_sets"] if row["scheme"] == "HARE")
     body = {"mode": "catalogue", "scheme": "HARE", "parameter_set": selected["parameter_set"],
@@ -152,7 +187,8 @@ def test_whole_scheme_jobs_keep_parameter_sets_and_goals_separate(tmp_path):
         assert [(item["parameter_set"], item["goal"]) for item in preview["instances"]] == identities
         assert preview["availability"]["classical"]["Prange"]["available"]
         assert "3 of 6" in preview["availability"]["classical"]["Prange"]["reason"]
-        assert not preview["availability"]["quantum"]["QPrange"]["available"]
+        assert preview["availability"]["quantum"]["QPrange"]["available"]
+        assert "3 of 6" in preview["availability"]["quantum"]["QPrange"]["reason"]
         status, started, _ = request(server, "POST", "/api/jobs", body)
         assert status == 202
         job = wait_for_job(server, started["id"])
@@ -173,11 +209,11 @@ def test_availability_never_runs_parameter_optimization(monkeypatch):
     for name in ("time_complexity", "memory_complexity", "_find_optimal_parameters", "get_optimal_parameters_dict"):
         monkeypatch.setattr(BaseAlgorithm, name, forbidden)
     for target in ("codebased_estimator.quantum.optimize", "codebased_estimator.mage_search.optimize",
-                   "codebased_estimator.classical_doom.estimate_doom", "codebased_estimator.backend._seed_bounded_m4ri"):
+                   "codebased_estimator.classical_doom.estimate_doom", "codebased_estimator.backend._seed_bounded_m4ri",
+                   "codebased_estimator.qprange.evaluate_qprange"):
         monkeypatch.setattr(target, forbidden)
     for scheme in catalogue()["schemes"]:
         availability = availability_for({"scope": "scheme", "scheme": scheme, "goal": "both"})
-        assert not availability["quantum"]["QPrange"]["available"]
         assert any(item["available"] for item in availability["classical"].values())
     rank = custom_request()
     rank["instance"]["problem"] = {"kind": "rank_sd", "parameters": {"n": 40, "k": 20, "m": 10, "r": 3, "q": 2}}
@@ -192,7 +228,7 @@ def test_custom_preflight_accepts_empty_selection_and_retains_validation(tmp_pat
         assert preview["availability"]["classical"]["Prange"]["available"]
         assert preview["availability"]["classical"]["MAGE-Stern"]["available"]
         assert preview["availability"]["quantum"]["QSS"]["available"]
-        assert not preview["availability"]["quantum"]["QPrange"]["available"]
+        assert preview["availability"]["quantum"]["QPrange"]["available"]
         assert server.jobs._jobs == {}
         data["instance"]["problem"]["parameters"]["k"] = 100
         status, error, _ = request(server, "POST", "/api/availability", data)
