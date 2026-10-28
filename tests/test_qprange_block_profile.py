@@ -83,7 +83,7 @@ def test_profile_metadata_and_qcsd_fallback_are_preserved(profile, solutions, mo
     assert fallback.metadata["effective_targets"] == 1
     assert fallback.metadata["doom"]["applied"] is False
     assert BLOCK_OUTER in direct.assumptions and BLOCK_SOLUTIONS in direct.assumptions
-    assert "block profiles or structured-matrix rank" not in direct.metadata["not_included"]
+    assert "actual structured-matrix rank" in direct.metadata["not_included"]
     json.dumps(asdict(direct), allow_nan=False)
 
 
