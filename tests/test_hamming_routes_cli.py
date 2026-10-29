@@ -16,10 +16,10 @@ def test_list_routes_includes_both_candidates_without_costing(monkeypatch, capsy
     monkeypatch.setattr(cli, "estimate", lambda *args, **kwargs: pytest.fail("listing ran estimator"))
     assert main(["hamming", "--list-routes", "--json"]) == 0
     records = json.loads(capsys.readouterr().out)
-    assert len(records) == 117
-    assert len({r["name"] for r in records}) == 117
-    assert sum(r["route_id"] == "composite" for r in records) == 26
-    assert sum(r["route_id"] == "u_only" for r in records) == 26
+    assert len(records) == 123
+    assert len({r["name"] for r in records}) == 123
+    assert sum(r["route_id"] == "composite" for r in records) == 28
+    assert sum(r["route_id"] == "u_only" for r in records) == 28
     mito = [r for r in records if r["parameter_set"] == "Mito-1-128"]
     assert [r["targets"] for r in mito] == [30746, 30746, 30746, 15373]
     assert [r["route_id"] for r in mito] == ["baseline", "parity", "u_only", "composite"]
@@ -40,7 +40,7 @@ def different_family_winners(monkeypatch):
         ])
 
     monkeypatch.setattr(cli, "estimate", estimate)
-    return ["hamming", "--parameter-sets", "HARE-128", "--goal", "msg_recovery",
+    return ["hamming", "--parameter-sets", "HARE-2", "--goal", "msg_recovery",
             "--classical-algorithms", "Prange", "--quantum-algorithms", "QSS"]
 
 

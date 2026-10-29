@@ -12,10 +12,12 @@ from codebased_estimator.hamming import HammingScheme
 
 # (scheme, parameter_set, N, K, total weight, cyclic target count).
 COMPOSITE_EXPECTED = [
-    ("HARE", "HARE-128", 62697, 20899, 303, 20899),
-    ("HARE", "HARE-256", 157137, 52379, 486, 52379),
-    ("HARE", "HARE-384", 314607, 104869, 747, 104869),
-    ("HARE", "HARE-512", 521943, 173981, 967, 173981),
+    ("HARE", "HARE-1", 48201, 16067, 237, 16067),
+    ("HARE", "HARE-2", 62697, 20899, 303, 20899),
+    ("HARE", "HARE-3", 97959, 32653, 363, 32653),
+    ("HARE", "HARE-5", 157137, 52379, 486, 52379),
+    ("HARE", "HARE-7", 314607, 104869, 747, 104869),
+    ("HARE", "HARE-9", 521943, 173981, 967, 173981),
     ("NSS-HQC", "NSS-HQC-128", 88329, 29443, 249, 29443),
     ("NSS-HQC", "NSS-HQC-256", 163479, 54493, 399, 54493),
     ("NSS-HQC", "NSS-HQC-384", 367737, 122579, 597, 122579),
@@ -59,7 +61,7 @@ def test_composite_reference_tuples(scheme, parameter_set, n, k, w, targets, doo
 
 
 @pytest.mark.parametrize("scheme,parameter_set", [
-    ("HARE", "HARE-128"),
+    ("HARE", "HARE-2"),
     ("NSS-HQC", "NSS-HQC-128"),
     ("TriQ-KEM", "TriQ-KEM-128"),
     ("Mito", "Mito-1-128"),

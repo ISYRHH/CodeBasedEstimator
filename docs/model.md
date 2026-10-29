@@ -77,7 +77,7 @@ $$
 
 ## 内置 Hamming 方案的 DOOM 映射
 
-[hamming.py](../codebased_estimator/hamming.py) 将 41 组参数展开为 117 条路线。下表 $r$ 为基础循环块长，Mito 的 $d=2^\ell$ 为环坐标数。
+[hamming.py](../codebased_estimator/hamming.py) 将 43 组参数展开为 123 条路线。下表 $r$ 为基础循环块长，Mito 的 $d=2^\ell$ 为环坐标数。
 
 | 方案 | 密钥恢复 | 消息恢复 | `doom="auto"` 目标数 |
 |---|---|---|---|
