@@ -27,6 +27,9 @@ from .estimator import estimate
 from .hamming import GOALS, HAMMING_SCHEMES, HammingScheme, hamming_catalogue
 from .matrix_costs import DEFAULT_MATRIX_PROFILE, MATRIX_PROFILES
 from .models import AttackInstance, Options, Problem, QUANTUM_ALGORITHMS
+from .rank import (RANK_SCHEMES, RANK_GENERIC_ALGORITHMS, RANK_SCHEME_ALGORITHMS,
+                   RANK_CLASSICAL_ALGORITHMS, RANK_QUANTUM_ALGORITHMS,
+                   RankModel, RankScheme, rank_catalogue)
 
 
 MAX_BODY_BYTES = 64 * 1024
@@ -62,6 +65,8 @@ def _algorithm_families() -> dict[str, list[str]]:
         )
     }
     families["binary"].extend(ClassicalModel.local_algorithms)
+    families["rank"].extend(RANK_GENERIC_ALGORITHMS)
+    families["rank_scheme"] = list(RANK_SCHEME_ALGORITHMS)
     return families
 
 
@@ -69,11 +74,11 @@ def catalogue() -> dict[str, Any]:
     families = _algorithm_families()
     first = hamming_catalogue()[0]
     return {
-        "schemes": list(HAMMING_SCHEMES),
-        "parameter_sets": hamming_catalogue(),
+        "schemes": list(HAMMING_SCHEMES + RANK_SCHEMES),
+        "parameter_sets": hamming_catalogue() + rank_catalogue(),
         "algorithms": {
             "classical": sorted({name for names in families.values() for name in names}),
-            "quantum": list(QUANTUM_ALGORITHMS),
+            "quantum": list(QUANTUM_ALGORITHMS + RANK_QUANTUM_ALGORITHMS),
         },
         "algorithm_families": deepcopy(families),
         "matrix_profiles": list(MATRIX_PROFILES),
@@ -108,13 +113,15 @@ def catalogue_instances(data: dict) -> list[AttackInstance]:
     for key in required:
         if not isinstance(data.get(key), str):
             raise ValueError(f"{key} must be a string")
-    scheme = HammingScheme(data["scheme"])
+    is_rank = data["scheme"] in RANK_SCHEMES
+    scheme = RankScheme(data["scheme"]) if is_rank else HammingScheme(data["scheme"])
     goals = GOALS if data["goal"] == "both" else (data["goal"],)
     parameter_sets = scheme.parameter_sets if scope == "scheme" else (data["parameter_set"],)
-    return [instance for parameter_set in parameter_sets for goal in goals for instance in scheme.instances(
-        parameter_set, goal, doom=data.get("doom", "auto"),
-        unbalanced=data.get("unbalanced", "auto"),
-    )]
+    route_options = {} if is_rank else {
+        "doom": data.get("doom", "auto"), "unbalanced": data.get("unbalanced", "auto"),
+    }
+    return [instance for parameter_set in parameter_sets for goal in goals
+            for instance in scheme.instances(parameter_set, goal, **route_options)]
 
 
 def prepare_job(data: Any, *, require_selection: bool = True) -> tuple[list[AttackInstance], Options]:
@@ -153,7 +160,10 @@ def prepare_job(data: Any, *, require_selection: bool = True) -> tuple[list[Atta
 
     supplied_options = _object(data.get("options", {}), "options")
     _only_fields(supplied_options, set(DEFAULT_OPTIONS), "options")
-    options = Options(**{**DEFAULT_OPTIONS, **supplied_options})
+    defaults = dict(DEFAULT_OPTIONS)
+    if instances and all(instance.problem.kind == "rank_scheme" for instance in instances):
+        defaults["classical_algorithms"] = ["Rank-OJ"]
+    options = Options(**{**defaults, **supplied_options})
     allowed = catalogue()["algorithms"]
     for family in ("classical", "quantum"):
         names = getattr(options, f"{family}_algorithms")
@@ -235,6 +245,13 @@ def algorithm_availability(instances: list[AttackInstance], options: Options) ->
             supported = 0
             reasons = []
             for instance in instances:
+                if name in RANK_CLASSICAL_ALGORITHMS + RANK_QUANTUM_ALGORITHMS:
+                    reason = RankModel().applicability(name, instance)
+                    if reason:
+                        reasons.append(reason)
+                    else:
+                        supported += 1
+                    continue
                 try:
                     result = models[family].estimate_algorithm(name, instance, options)
                 except _AvailableAlgorithm:

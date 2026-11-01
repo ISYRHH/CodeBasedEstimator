@@ -13,13 +13,14 @@ from . import AttackInstance, DemoScheme, Options, estimate
 from .comparison import compare_routes
 from .hamming import (DEFAULT_HAMMING_ALGORITHMS, DOOM_MODES, HAMMING_SCHEMES, UNBALANCED_MODES,
                       hamming_catalogue, hamming_instances)
+from .rank import RANK_SCHEMES, rank_catalogue, rank_instances
 from .models import QUANTUM_ALGORITHMS
 from .matrix_costs import DEFAULT_MATRIX_PROFILE, MATRIX_PROFILES
 
 
 def _csv_results(reports, comparisons=()):
     """Keep every requested classical/quantum candidate, including placeholders."""
-    fields = ("scheme", "parameter_set", "goal", "n", "k", "w", "q", "status",
+    fields = ("scheme", "parameter_set", "goal", "n", "k", "w", "q", "m", "r", "status",
               "model", "algorithm", "time_log2", "memory_log2", "time_unit",
               "memory_unit", "is_best", "reason", "cost_model", "matrix_profile",
               "matrix_block_size", "problem_kind", "doom", "targets", "active_targets",
@@ -34,7 +35,7 @@ def _csv_results(reports, comparisons=()):
             writer.writerow({
                 "scheme": instance.scheme, "parameter_set": instance.parameter_set,
                 "goal": instance.goal,
-                **{name: instance.problem.parameters.get(name, "") for name in ("n", "k", "w", "q")},
+                **{name: instance.problem.parameters.get(name, "") for name in ("n", "k", "w", "q", "m", "r")},
                 "model": row.model, "algorithm": row.algorithm, "status": row.status,
                 "time_log2": row.time_log2, "memory_log2": row.memory_log2,
                 "time_unit": row.time_unit, "memory_unit": row.memory_unit,
@@ -153,7 +154,7 @@ def _table(reports, *, brief=True):
         print(f"  {'algorithm':24} {'model':10} {'status':17} {'time':>9} {'memory':>9}  units (time / memory); parameters")
         for r in report.results:
             time = "--" if r.time_log2 is None else f"{r.time_log2:.3f}"
-            memory = "not estimated" if r.is_time_only_quantum else (
+            memory = "not estimated" if r.is_time_only else (
                 "--" if r.memory_log2 is None else f"{r.memory_log2:.3f}"
             )
             print(f"  {r.algorithm:24} {r.model:10} {r.status:17} {time:>9} {memory:>9}  {r.time_unit} / {r.memory_unit}; {r.parameters}")
@@ -185,12 +186,16 @@ def _table(reports, *, brief=True):
             r.is_time_only_quantum for r in report.results
         ):
             print("  Quantum memory bound is not applied (time-only estimates).")
+        if report.options.memory_bound_log2_bits is not None and any(
+            r.is_time_only and r.model == "classical" for r in report.results
+        ):
+            print("  Classical time-only estimates are excluded from minima under a memory bound.")
         for family, conclusion in report.conclusions.items():
             if conclusion.status == "not_requested":
                 continue
             if conclusion.best:
                 for best in conclusion.best:
-                    memory = ("not estimated" if best.is_time_only_quantum else
+                    memory = ("not estimated" if best.is_time_only else
                               f"2^{best.memory_log2:.3f} {best.memory_unit}")
                     print(f"  Best {family}: {best.algorithm} | "
                           f"time=2^{best.time_log2:.3f} {best.time_unit}; "
@@ -217,32 +222,36 @@ def main(argv=None) -> int:
                      help="override log2 of the acceptable solution count per syndrome (CE nsolutions); omit for QCCF")
     demo.set_defaults(doom=None, targets=None, log2_solutions=None)
     hamming = commands.add_parser("hamming", help="evaluate built-in Hamming parameters and recovery routes")
-    hamming.add_argument("--schemes", nargs="+", choices=HAMMING_SCHEMES, help="default: all nine schemes")
-    hamming.add_argument("--parameter-sets", nargs="+", help="exact IDs from --list; default: all sets of selected schemes")
-    hamming.add_argument("--goal", choices=("both", "key_recovery", "msg_recovery"), default="both")
+    rank = commands.add_parser("rank", help="evaluate built-in Rank scheme parameters and recovery routes")
+    for command, schemes in ((hamming, HAMMING_SCHEMES), (rank, RANK_SCHEMES)):
+        command.add_argument("--schemes", nargs="+", choices=schemes, help="default: all schemes in this catalogue")
+        command.add_argument("--parameter-sets", nargs="+", help="exact IDs from --list; default: all sets of selected schemes")
+        command.add_argument("--goal", choices=("both", "key_recovery", "msg_recovery"), default="both")
+        listing = command.add_mutually_exclusive_group()
+        listing.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
+        listing.add_argument("--list-routes", action="store_true", help="list key/msg recovery problems and mapped parameters without running estimators")
+        command.add_argument("--all-classical", action="store_true", help="use all default classical candidates (already the default)")
+        command.add_argument("--details", action="store_true", help="print per-algorithm tables; use --no-brief for route and input details")
+        command.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
+        command.set_defaults(targets=None, log2_solutions=None)
     hamming.add_argument("--doom", choices=DOOM_MODES, default="auto",
                          help="auto: documented QCCF/QCSD orbit proxies; none: original single-target SD baseline")
-    listing = hamming.add_mutually_exclusive_group()
-    listing.add_argument("--list", action="store_true", help="list source parameter snapshots without running estimators")
-    listing.add_argument("--list-routes", action="store_true", help="list key/msg recovery problems and mapped parameters without running estimators")
-    hamming.add_argument("--all-classical", action="store_true", help="use all default classical candidates per field (already the default)")
-    hamming.add_argument("--details", action="store_true", help="print per-algorithm tables; use --no-brief for route and input details")
-    hamming.add_argument("--progress", action="store_true", help="print route progress to stderr, keeping JSON/CSV stdout clean")
-    hamming.set_defaults(targets=None, log2_solutions=None)
-    for command in (demo, run, hamming):
-        command.add_argument("--unbalanced", choices=UNBALANCED_MODES, default="auto",
-                             help="auto: use supplied block weights in supported outer probabilities; none: total-weight baseline")
+    rank.set_defaults(doom=None, unbalanced="auto")
+    for command in (demo, run, hamming, rank):
+        if command is not rank:
+            command.add_argument("--unbalanced", choices=UNBALANCED_MODES, default="auto",
+                                 help="auto: use supplied block weights in supported outer probabilities; none: total-weight baseline")
         command.add_argument("--brief", action=argparse.BooleanOptionalAction, default=True,
                              help="compact text (default: on); --no-brief adds route, input details and parameter sources; JSON/CSV unchanged")
         command.add_argument("--classical-algorithms", nargs="*", help="classical names; default: all candidates for the problem family (demo uses a small selection); empty disables classical")
-        command.add_argument("--quantum-algorithms", nargs="*", help="quantum names; default: all registered candidates (demo uses explicit selections); empty disables quantum")
+        command.add_argument("--quantum-algorithms", nargs="*", help="quantum names; default: all registered candidates (rank: none; demo: explicit selections); empty disables quantum")
         command.add_argument("--quantum-matrix-profile", choices=MATRIX_PROFILES,
                              default=DEFAULT_MATRIX_PROFILE,
                              help="matrix cost profile for QSS/QMMT+; default: %(default)s")
         command.add_argument("--memory-bound", type=float, help="maximum log2(memory in bits); not applied to time-only quantum estimates")
         output = command.add_mutually_exclusive_group()
         output.add_argument("--json", action="store_true", help="emit reproducible result records")
-        if command is hamming:
+        if command in (hamming, rank):
             output.add_argument("--csv", action="store_true", help="emit all classical/quantum algorithm results and per-family best flags as CSV")
     args = parser.parse_args(argv)
     try:
@@ -257,10 +266,18 @@ def main(argv=None) -> int:
                     for family, names in selections.items()
                     for goal in ("key_recovery", "msg_recovery")
                     for instance in adapter.instances(family, goal)]
-        elif args.command == "hamming":
-            instances = hamming_instances(schemes=args.schemes,
-                                          parameter_sets=args.parameter_sets, goal=args.goal,
-                                          doom=args.doom, unbalanced=args.unbalanced)
+        elif args.command in ("hamming", "rank"):
+            if args.command == "hamming":
+                instances = hamming_instances(schemes=args.schemes,
+                                              parameter_sets=args.parameter_sets, goal=args.goal,
+                                              doom=args.doom, unbalanced=args.unbalanced)
+                source_catalogue = hamming_catalogue
+                classical, quantum = DEFAULT_HAMMING_ALGORITHMS, QUANTUM_ALGORITHMS
+            else:
+                instances = rank_instances(schemes=args.schemes,
+                                           parameter_sets=args.parameter_sets, goal=args.goal)
+                source_catalogue = rank_catalogue
+                classical, quantum = None, ()
             if args.all_classical and args.classical_algorithms is not None:
                 raise ValueError("--all-classical and --classical-algorithms are mutually exclusive")
             if args.csv and args.details:
@@ -274,7 +291,7 @@ def main(argv=None) -> int:
                 if args.csv:
                     raise ValueError("--csv requires estimation; use --list --json for the source catalogue")
                 wanted = {instance.parameter_set for instance in instances}
-                catalogue = [row for row in hamming_catalogue() if row["parameter_set"] in wanted]
+                catalogue = [row for row in source_catalogue() if row["parameter_set"] in wanted]
                 if args.json:
                     print(json.dumps(catalogue, indent=2, ensure_ascii=False, allow_nan=False))
                 else:
@@ -283,7 +300,7 @@ def main(argv=None) -> int:
                     if not args.brief:
                         _sources(reference for row in catalogue for reference in row["references"])
                 return 0
-            jobs = [(instance, DEFAULT_HAMMING_ALGORITHMS, QUANTUM_ALGORITHMS) for instance in instances]
+            jobs = [(instance, classical, quantum) for instance in instances]
         else:
             try:
                 data = json.loads(args.input.read_text(encoding="utf-8"))
@@ -293,7 +310,7 @@ def main(argv=None) -> int:
             jobs = [(instance, None, QUANTUM_ALGORITHMS)]
         reports = []
         for index, (instance, classical, quantum) in enumerate(jobs, 1):
-            if args.command == "hamming" and args.progress:
+            if args.command in ("hamming", "rank") and args.progress:
                 print(f"[{index}/{len(jobs)}] {instance.name}", file=sys.stderr, flush=True)
             changes = {}
             if args.unbalanced == "none":
@@ -316,7 +333,7 @@ def main(argv=None) -> int:
                 memory_bound_log2_bits=args.memory_bound,
                 quantum_matrix_profile=args.quantum_matrix_profile,
             )))
-        comparisons = compare_routes(reports) if args.command == "hamming" else []
+        comparisons = compare_routes(reports) if args.command in ("hamming", "rank") else []
         if args.json:
             by_route = {name: comparison.to_dict() for comparison in comparisons
                         if len(comparison.routes) > 1 for name in comparison.routes}
@@ -325,13 +342,13 @@ def main(argv=None) -> int:
                 if record["instance"]["name"] in by_route:
                     record["route_comparison"] = by_route[record["instance"]["name"]]
             print(json.dumps(records, indent=2, ensure_ascii=False, allow_nan=False))
-        elif args.command == "hamming" and args.csv:
+        elif args.command in ("hamming", "rank") and args.csv:
             _csv_results(reports, comparisons)
         elif args.command == "hamming" and args.brief and not args.details and all(not r.options.quantum_algorithms for r in reports):
             _hamming_summary(reports)
         else:
             _table(reports, brief=args.brief)
-        if args.command == "hamming" and not args.json and not args.csv:
+        if args.command in ("hamming", "rank") and not args.json and not args.csv:
             _route_summary(comparisons)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))

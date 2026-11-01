@@ -225,6 +225,66 @@ test("catalogue and custom field order select only the matching classical algori
   assert.equal(ui.evaluate("algorithmFamily()"), "rank");
 });
 
+test("Rank schemes use their declared algorithm family and keep supported selections across routes", async () => {
+  const ui = catalogueWorkspace();
+  ui.context.rankCatalogue = {
+    ...catalogue,
+    parameter_sets:[...catalogue.parameter_sets,
+      {scheme:"BAG-Loong",parameter_set:"BAG-Loong-128",algorithm_family:"rank_scheme",parameters:{q:2,m:47,n:42},references:[]},
+      {scheme:"BRA",parameter_set:"BRA-128",algorithm_family:"rank_scheme",parameters:{q:2,m:67,k:121},references:[]},
+    ],
+    algorithm_families:{...catalogue.algorithm_families,rank_scheme:["Rank-OJ","Rank-PRR","Rank-MM","Rank-AGHT"]},
+    algorithms:{classical:[...catalogue.algorithms.classical,"Rank-OJ","Rank-PRR","Rank-MM","Rank-AGHT"],quantum:[...catalogue.algorithms.quantum,"Rank-WT23"]},
+  };
+  ui.evaluate("state.catalogue = rankCatalogue");
+  ui.get("scheme").value = "BAG-Loong";
+  ui.get("parameter-set").value = "BAG-Loong-128";
+  ui.context.fetch = async () => ({ok:true,json:async () => ({instances:[],availability:{
+    classical:{"Rank-OJ":{available:true},"Rank-PRR":{available:true},"Rank-MM":{available:true},"Rank-AGHT":{available:false}},
+    quantum:{"Rank-WT23":{available:false}},
+  }})});
+  ui.evaluate("syncInputs()");
+  await ui.evaluate("updateRoutes()");
+  assert.equal(ui.evaluate("algorithmFamily()"), "rank_scheme");
+  assert.match(ui.evaluate("chips({A:[[5,5],4]})"), /\[\[5,5\],4\]/);
+  assert.match(ui.get("classical-algorithms").innerHTML, /Rank-OJ/);
+  assert.doesNotMatch(ui.get("classical-algorithms").innerHTML, /Prange|Stern|GRS/);
+  assert.deepEqual(ui.plain("selectedAlgorithms('classical')"), []);
+  assert.equal(ui.get("quantum-family").hidden, true);
+  assert.equal(ui.get("quantum-algorithms").children.length, 0);
+  assert.equal(ui.get("matrix-profile-field").hidden, true);
+  assert.equal(ui.get("matrix-profile").disabled, true);
+  assert.equal(ui.get("doom-field").hidden, true);
+  assert.equal(ui.get("doom").disabled, true);
+  assert.equal(ui.get("unbalanced-field").hidden, true);
+  assert.equal(ui.get("unbalanced").disabled, true);
+  ui.evaluate("renderAlgorithms(['Rank-OJ'], [])");
+  assert.deepEqual(ui.plain("requestBody()").options.classical_algorithms, ["Rank-OJ"]);
+  assert.deepEqual(ui.plain("requestBody()").options.quantum_algorithms, []);
+
+  ui.get("scheme").value = "BRA";
+  ui.get("parameter-set").value = "BRA-128";
+  await ui.evaluate("updateRoutes()");
+  assert.deepEqual(ui.plain("selectedAlgorithms('classical')"), ["Rank-OJ"]);
+  ui.get("scheme").value = "Binary";
+  ui.get("parameter-set").value = "Binary-1";
+  ui.evaluate("syncInputs(); renderAlgorithms()");
+  assert.equal(ui.get("doom-field").hidden, false);
+  assert.equal(ui.get("doom").disabled, false);
+  assert.equal(ui.get("unbalanced").disabled, false);
+  assert.equal(ui.get("quantum-family").hidden, false);
+  assert.equal(ui.get("matrix-profile-field").hidden, false);
+  assert.equal(ui.get("matrix-profile").disabled, false);
+  assert.match(ui.get("quantum-algorithms").innerHTML, /QPrange/);
+  assert.doesNotMatch(ui.get("quantum-algorithms").innerHTML, /Rank-WT23/);
+  ui.evaluate(`state.availability.quantum.QSS = {available:true}; renderAlgorithms([], ['QSS']);
+    state.mode = 'custom'; $('problem-kind').value = 'rank_sd'; renderAlgorithms()`);
+  assert.equal(ui.get("quantum-family").hidden, true);
+  assert.equal(ui.get("quantum-algorithms").children.length, 0);
+  assert.deepEqual(ui.plain("selectedAlgorithms('quantum')"), []);
+  assert.doesNotMatch(ui.get("classical-algorithms").innerHTML, /Rank-OJ/);
+});
+
 test("QPrange selection follows backend availability alongside other algorithms", () => {
   const ui = catalogueWorkspace();
   ui.evaluate(`state.availability = {

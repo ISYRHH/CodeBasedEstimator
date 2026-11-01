@@ -9,9 +9,11 @@
       "复算最优" 为本次实现的受限搜索/参数复现结果（log2，1 位小数）。
 """
 import sys, math, io, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from math import log2, ceil, inf
-import rank_sd_schemes as R
+if __package__:
+    from . import rank_sd_schemes as R
+else:
+    import rank_sd_schemes as R
 
 lg = log2
 buf = io.StringIO()

@@ -55,10 +55,11 @@ from typing import Dict, List, Optional, Tuple
 
 INF = float("inf")
 
-try:  # 控制台兼容：避免个别符号在 GBK 终端崩溃
-    sys.stdout.reconfigure(errors="replace")
-except Exception:
-    pass
+if __name__ == "__main__":
+    try:  # 控制台兼容：避免个别符号在 GBK 终端崩溃
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:
+        pass
 
 
 def _w(s: str) -> int:

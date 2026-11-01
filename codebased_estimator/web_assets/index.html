@@ -86,7 +86,7 @@
               <div class="label-row"><h2>Algorithms</h2><span class="muted" id="algorithm-count">1 selected</span></div>
               <div class="algorithm-families"><div class="algorithm-family"><div class="algorithm-heading"><h3>Classical</h3><button class="text-button" type="button" id="select-classical">Select all</button><button class="text-button" type="button" id="clear-classical">Clear</button></div>
               <div class="algorithm-options" id="classical-algorithms"></div>
-              </div><div class="algorithm-family"><div class="algorithm-heading"><h3>Quantum</h3><button class="text-button" type="button" id="select-quantum">Select all</button><button class="text-button" type="button" id="clear-quantum">Clear</button></div>
+              </div><div class="algorithm-family" id="quantum-family"><div class="algorithm-heading"><h3>Quantum</h3><button class="text-button" type="button" id="select-quantum">Select all</button><button class="text-button" type="button" id="clear-quantum">Clear</button></div>
               <div class="algorithm-options" id="quantum-algorithms"></div>
               <p class="field-hint">Time estimates only; availability depends on the selected route.</p></div></div>
               <p class="field-hint" id="availability-note" aria-live="polite"></p>
@@ -95,9 +95,9 @@
               <summary>Model options</summary>
               <div class="options-grid">
                 <div id="doom-field"><label for="doom">DOOM</label><select id="doom"><option value="auto">Automatic</option><option value="none">Single target</option></select></div>
-                <div><label for="unbalanced">Block weights</label><select id="unbalanced"><option value="auto">Use where supported</option><option value="none">Total-weight baseline</option></select></div>
+                <div id="unbalanced-field"><label for="unbalanced">Block weights</label><select id="unbalanced"><option value="auto">Use where supported</option><option value="none">Total-weight baseline</option></select></div>
                 <div><label for="memory-bound">Classical memory limit (log₂ bits)</label><input id="memory-bound" type="number" min="0" step="any" placeholder="No limit"></div>
-                <div><label for="matrix-profile">Quantum matrix model</label><select id="matrix-profile"></select></div>
+                <div id="matrix-profile-field"><label for="matrix-profile">Quantum matrix model</label><select id="matrix-profile"></select></div>
               </div>
             </details>
           </fieldset>
@@ -134,7 +134,7 @@
           </div>
           <div id="tab-details" role="tabpanel" aria-labelledby="result-tab-details" hidden></div>
         </div>
-        <p class="results-footnote">Model costs, not security levels. Classical and quantum units differ; quantum memory is not estimated.</p>
+        <p class="results-footnote">Model costs, not security levels. Units are shown per row; memory is not estimated for quantum and local Rank results.</p>
       </section>
       <details class="route-preview">
         <summary>Recovery routes <span class="muted" id="route-count"></span></summary>
@@ -154,9 +154,9 @@
       <h1>Model notes</h1>
       <dl class="model-notes">
         <dt>Scope</dt><dd>Results cover the selected recovery routes and algorithms, not whole-scheme security.</dd>
-        <dt>Units</dt><dd>All costs are log₂ values. Classical time uses bit operations and memory uses bits. Quantum time uses quantum bit operations; quantum memory is not estimated.</dd>
+        <dt>Units</dt><dd>All costs are log₂ values in the units shown per row. Memory is not estimated for quantum and local Rank results.</dd>
         <dt>Targets</dt><dd>QCSD counts syndrome targets. QCCF counts acceptable nonzero codewords; omit solutions per syndrome for QCCF.</dd>
-        <dt>Minimum cost</dt><dd>Minima include only evaluated, eligible candidates within the same cost family and units. Classical memory limits do not apply to time-only quantum estimates.</dd>
+        <dt>Minimum cost</dt><dd>Minima include only evaluated, eligible candidates within the same cost family and units. A classical memory limit excludes local Rank estimates with unknown memory from minima. The limit does not apply to time-only quantum estimates.</dd>
         <dt>Assumptions</dt><dd>Open a route or result's details for its model assumptions, sources, and algorithm parameters. JSON exports preserve the complete report.</dd>
       </dl>
     </section>

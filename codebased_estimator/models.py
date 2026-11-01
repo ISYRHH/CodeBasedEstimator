@@ -44,7 +44,7 @@ class Problem:
     """
 
     kind: str
-    parameters: dict[str, int]
+    parameters: dict[str, Any]
     log2_solutions: Optional[float] = None
 
     def __post_init__(self):
@@ -221,12 +221,16 @@ class Estimate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def is_time_only_quantum(self) -> bool:
-        """Recognize the explicit exception to memory-feasibility comparisons."""
-        return (self.model == "quantum"
-                and self.metadata.get("resource_scope") == "time_only"
+    def is_time_only(self) -> bool:
+        """Recognize results whose backend explicitly does not estimate memory."""
+        return (self.metadata.get("resource_scope") == "time_only"
                 and self.memory_log2 is None
                 and self.memory_unit == "not_estimated")
+
+    @property
+    def is_time_only_quantum(self) -> bool:
+        """Recognize the quantum exception to memory-feasibility comparisons."""
+        return self.model == "quantum" and self.is_time_only
 
 
 class AttackModel(Protocol):
@@ -278,7 +282,7 @@ class Report:
                 and isfinite(row.time_log2)
                 and isinstance(row.time_unit, str) and row.time_unit.strip()
                 and row.time_unit != "unspecified"
-                and (row.is_time_only_quantum or (
+                and (row.is_time_only_quantum or (row.is_time_only and bound is None) or (
                     isinstance(row.memory_log2, Real) and not isinstance(row.memory_log2, bool)
                     and isfinite(row.memory_log2)
                     and isinstance(row.memory_unit, str) and row.memory_unit.strip()
@@ -294,6 +298,8 @@ class Report:
                     "No computed finite estimate in declared units satisfies "
                     "the memory constraint; see individual algorithm results."
                 )
+                if any(row.is_time_only and row.model == "classical" for row in rows):
+                    reason = "No eligible finite time estimate; memory feasibility is unknown for time-only Rank results."
                 conclusions[family] = Conclusion(
                     "unavailable", reason=reason,
                 )
@@ -309,6 +315,8 @@ class Report:
                 "finite times and declared units; time-only quantum estimates have no memory "
                 "estimate, and the memory bound is not applied to them; limited to this evaluation."
                 if any(row.is_time_only_quantum for row in eligible) else
+                "finite times and declared units; memory is not estimated for time-only results; limited to this evaluation."
+                if any(row.is_time_only for row in eligible) else
                 "finite costs, declared units and feasible memory; limited to this evaluation."
             )
             conclusions[family] = Conclusion(

@@ -14,6 +14,7 @@ import subprocess
 
 from .assumptions import BLOCK_OUTER, BLOCK_SOLUTIONS, CLASSICAL_COST
 from .models import AttackInstance, Estimate, Options, Problem
+from .rank import RANK_CLASSICAL_ALGORITHMS, RankModel, rank_algorithms
 from .doom_fallback import single_target_fallback
 
 
@@ -441,7 +442,7 @@ class ClassicalModel:
 
     @classmethod
     def _known_names(cls):
-        names = set(cls.local_algorithms)
+        names = set(cls.local_algorithms) | set(RANK_CLASSICAL_ALGORITHMS)
         for family, base in (("SDEstimator", "SDAlgorithm"),
                              ("SDFqEstimator", "SDFqAlgorithm"),
                              ("RankSDEstimator", "RankSDAlgorithm")):
@@ -676,8 +677,12 @@ class ClassicalModel:
         requested = options.classical_algorithms
         if requested == ():
             return []
+        if requested is None and instance.problem.kind == "rank_scheme":
+            return [self.estimate_algorithm(name, instance, options)
+                    for name in rank_algorithms(instance)]
         resolved = self._resolve(self._backend_problem(instance))
         candidates = set(resolved[-1]) | set(self.local_algorithms) if resolved is not None else self._known_names()
+        candidates.update(RANK_CLASSICAL_ALGORITHMS)
         if requested is not None:
             unknown = set(requested).difference(candidates)
             if unknown:
@@ -700,6 +705,8 @@ class ClassicalModel:
         self, name: str, instance: AttackInstance, options: Options,
     ) -> Estimate:
         """Receive the full tagged instance before applicability checks and optimization."""
+        if name in RANK_CLASSICAL_ALGORITHMS:
+            return RankModel().estimate_algorithm(name, instance, options)
         if (instance.block_profile is not None and instance.problem.log2_solutions is None
                 and "doom:qccf" not in instance.tags):
             from .classical_doom import _logcomb
