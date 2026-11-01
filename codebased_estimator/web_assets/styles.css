@@ -114,6 +114,7 @@ details > summary + * { margin-top: 12px; }
 .algorithms-section { margin-top: 26px; }
 .algorithms-section > .label-row { margin-bottom: 12px; }
 .algorithm-families { display: grid; grid-template-columns: 2fr 1fr; gap: 32px; }
+.algorithm-families:has(> #quantum-family[hidden]) { grid-template-columns: 1fr; }
 .algorithm-heading { display: flex; align-items: baseline; gap: 16px; margin: 0 0 8px; }
 .algorithm-heading .text-button { font-size: 14px; }
 .algorithm-options { display: flex; flex-wrap: wrap; gap: 8px 22px; }

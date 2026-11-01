@@ -111,7 +111,7 @@ def test_unmodeled_profile_contexts_do_not_enter_fixed_point(changes, monkeypatc
 
 
 def test_hamming_default_profiles_and_uniform_baseline_use_same_qprange():
-    common = dict(parameter_sets=["HARE-128"], goal="both", doom="none")
+    common = dict(parameter_sets=["HARE-2"], goal="both", doom="none")
     profiled, uniform = hamming_instances(**common), hamming_instances(**common, unbalanced="none")
     assert len(profiled) == len(uniform) == 3
     for current, baseline in zip(profiled, uniform):

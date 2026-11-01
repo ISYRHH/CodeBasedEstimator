@@ -7,6 +7,7 @@ from math import isfinite, log2
 
 from .assumptions import BLOCK_OUTER, BLOCK_SOLUTIONS
 from .models import AttackInstance, Estimate, Options, Problem, QUANTUM_ALGORITHMS
+from .rank import RANK_QUANTUM_ALGORITHMS, RankModel
 from .doom_fallback import single_target_fallback
 from .list_costs import LIST_COST_PROFILE
 from .matrix_costs import (DEFAULT_MATRIX_PROFILE, M4RI_MATRIX_PROFILE,
@@ -19,14 +20,15 @@ class QuantumModel:
 
     name = "quantum"
     algorithms = QUANTUM_ALGORITHMS
+    supported_algorithms = algorithms + RANK_QUANTUM_ALGORITHMS
 
     def estimate(self, instance: AttackInstance, options: Options) -> list[Estimate]:
         names = options.quantum_algorithms
-        unknown = set(names).difference(self.algorithms)
+        unknown = set(names).difference(self.supported_algorithms)
         if unknown:
             raise ValueError(
                 f"Unknown quantum algorithms: {', '.join(sorted(unknown))}. "
-                f"Available: {', '.join(self.algorithms)}"
+                f"Available: {', '.join(self.supported_algorithms)}"
             )
         return [self.estimate_algorithm(name, instance, options) for name in names]
 
@@ -34,8 +36,10 @@ class QuantumModel:
         self, name: str, instance: AttackInstance, options: Options,
     ) -> Estimate:
         """Validate the full recovery context before optimizing a finite model."""
-        if name not in self.algorithms:
+        if name not in self.supported_algorithms:
             raise ValueError(f"Unknown quantum algorithm: {name}")
+        if name in RANK_QUANTUM_ALGORITHMS:
+            return RankModel().estimate_algorithm(name, instance, options)
         codeword_finding = instance.tags == ("doom:qccf",)
         # Validate the explicitly tagged proxy using the ordinary SD contract,
         # while retaining the original problem kind, tags, and target semantics.

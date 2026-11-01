@@ -110,6 +110,8 @@ def compare_routes(reports: Iterable[Report]) -> list[RouteComparison]:
                 "Time-only quantum estimates have no memory estimate, and the memory "
                 "bound is not applied to them."
                 if any(candidate.estimate.is_time_only_quantum for candidate in candidates) else
+                "Memory feasibility is not assessed for time-only results."
+                if any(candidate.estimate.is_time_only for candidate in candidates) else
                 "Estimates have finite costs, declared units and feasible memory."
             )
             conclusions[family] = RouteConclusion(

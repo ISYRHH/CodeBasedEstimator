@@ -135,7 +135,7 @@ def test_classical_and_requested_quantum_algorithms_share_one_report(quantum_cos
         assert row.metadata["cost_breakdown"] == quantum_cost.details
         assert row.metadata["search"] == quantum_cost.search
         assert row.reason
-    assert report.backends["quantum"]["implemented_algorithms"] == ["QPrange", "QSS", "QMMT+"]
+    assert report.backends["quantum"]["implemented_algorithms"] == ["QPrange", "QSS", "QMMT+", "Rank-WT23"]
     json.dumps(report.to_dict(), allow_nan=False)
 
 

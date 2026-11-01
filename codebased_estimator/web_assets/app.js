@@ -52,7 +52,7 @@ function view(name, updateHash = true) {
 }
 
 function chips(parameters) {
-  return Object.entries(parameters || {}).map(([key, value]) => `<span class="parameter-chip">${escapeHTML(key)} <b>${escapeHTML(Array.isArray(value) ? `[${value.join(", ")}]` : value)}</b></span>`).join("");
+  return Object.entries(parameters || {}).map(([key, value]) => `<span class="parameter-chip">${escapeHTML(key)} <b>${escapeHTML(Array.isArray(value) ? JSON.stringify(value) : value)}</b></span>`).join("");
 }
 
 function selectedAlgorithms(family) {
@@ -67,7 +67,7 @@ function selectAlgorithms(family) {
 function algorithmFamily() {
   if (state.mode !== "custom") {
     const row = state.catalogue?.parameter_sets.find((entry) => entry.parameter_set === $("parameter-set").value);
-    return (row?.parameters.q ?? 2) === 2 ? "binary" : "qary";
+    return row?.algorithm_family || ((row?.parameters.q ?? 2) === 2 ? "binary" : "qary");
   }
   if ($("problem-kind").value === "rank_sd") return "rank";
   return Number($("param-q").value) === 2 ? "binary" : "qary";
@@ -80,7 +80,9 @@ function renderAlgorithms(classicalSelection, quantumSelection) {
   const checked = (family) => $$(`input[name="${family}-algorithm"]:checked`).map((input) => input.value);
   const selectedClassical = classicalSelection ?? checked("classical");
   const selectedQuantum = quantumSelection ?? checked("quantum");
-  const names = state.catalogue.algorithm_families?.[algorithmFamily()] || state.catalogue.algorithms.classical;
+  const algorithmFamilyName = algorithmFamily();
+  const rankFamily = ["rank", "rank_scheme"].includes(algorithmFamilyName);
+  const names = state.catalogue.algorithm_families?.[algorithmFamilyName] || state.catalogue.algorithms.classical;
   const common = ["Prange","Stern","Dumer","BJMM","MayOzerov","BothMay","BallCollision","MAGE-Stern","LeeBrickell","GRS","MaxMinors","SupportMinors"].filter((name) => names.includes(name));
   const other = names.filter((name) => !common.includes(name));
   const pill = (name, family, selected) => {
@@ -91,7 +93,11 @@ function renderAlgorithms(classicalSelection, quantumSelection) {
     return `<label class="algorithm-pill${available ? "" : " unavailable"}" title="${escapeHTML(reason)}"${available ? "" : ` tabindex="0" data-reason="${escapeHTML(reason)}"`}><input type="checkbox" name="${family}-algorithm" value="${escapeHTML(name)}" ${isChecked ? "checked" : ""} ${available ? "" : "disabled"} aria-label="${escapeHTML(name + (available ? "" : `: ${reason}`))}"><span>${escapeHTML(name)}</span></label>`;
   };
   $("classical-algorithms").innerHTML = [...common,...other].map((name) => pill(name, "classical", selectedClassical)).join("");
-  $("quantum-algorithms").innerHTML = state.catalogue.algorithms.quantum.map((name) => pill(name,"quantum",selectedQuantum)).join("");
+  $("quantum-family").hidden = rankFamily;
+  $("matrix-profile-field").hidden = rankFamily;
+  $("matrix-profile").disabled = rankFamily;
+  const quantumNames = rankFamily ? [] : state.catalogue.algorithms.quantum.filter((name) => !name.startsWith("Rank-"));
+  $("quantum-algorithms").innerHTML = quantumNames.map((name) => pill(name,"quantum",selectedQuantum)).join("");
   for (const family of ["classical","quantum"]) {
     $(`select-${family}`).disabled = !$$(`input[name="${family}-algorithm"]`).some((input) => !input.disabled);
     $(`clear-${family}`).disabled = state.checkingAvailability;
@@ -107,7 +113,11 @@ function countAlgorithms() {
 function syncInputs() {
   $("catalogue-fields").hidden = state.mode !== "catalogue";
   $("custom-fields").hidden = state.mode !== "custom";
-  $("doom-field").hidden = state.mode !== "catalogue";
+  const rankFamily = ["rank", "rank_scheme"].includes(algorithmFamily());
+  $("doom-field").hidden = state.mode !== "catalogue" || rankFamily;
+  $("doom").disabled = $("doom-field").hidden;
+  $("unbalanced-field").hidden = rankFamily;
+  $("unbalanced").disabled = rankFamily;
   const kind = $("problem-kind").value;
   const rank = kind === "rank_sd";
   $("weight-field").hidden = rank;

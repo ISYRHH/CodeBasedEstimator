@@ -38,10 +38,12 @@ EXPECTED = {
         "TRIKE-9": (309129, 206086, 333, 103043, 877, 2),
     },
     "HARE": {
-        "HARE-128": (41798, 20899, 158, 20899, 158, 2),
-        "HARE-256": (104758, 52379, 262, 52379, 262, 2),
-        "HARE-384": (209738, 104869, 386, 104869, 386, 2),
-        "HARE-512": (347962, 173981, 518, 173981, 518, 2),
+        "HARE-1": (32134, 16067, 132, 16067, 132, 2),
+        "HARE-2": (41798, 20899, 158, 20899, 158, 2),
+        "HARE-3": (65306, 32653, 200, 32653, 200, 2),
+        "HARE-5": (104758, 52379, 262, 52379, 262, 2),
+        "HARE-7": (209738, 104869, 386, 104869, 386, 2),
+        "HARE-9": (347962, 173981, 518, 173981, 518, 2),
     },
     "NSS-HQC": {
         "NSS-HQC-128": (58886, 29443, 146, 29443, 132, 2),
@@ -89,7 +91,7 @@ EXPECTED = {
 EXPECTED_TARGETS = {
     "BIKE_MLThre": [12323, 24659, 40973, 150001],
     "TRIKE": [9437, 19181, 32987, 62981, 103043],
-    "HARE": [20899, 52379, 104869, 173981],
+    "HARE": [16067, 20899, 32653, 52379, 104869, 173981],
     "NSS-HQC": [29443, 54493, 122579, 217901],
     "TriQ-KEM": [16301, 50363, 97651, 157627],
     "Mito": [30746, 67654, 212522, 29242, 64522, 204874, 41012, 86092, 261172],
@@ -143,7 +145,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert set(HAMMING_SCHEMES) == set(EXPECTED)
     expected_ids = {parameter_set for sets in EXPECTED.values() for parameter_set in sets}
     catalogue = hamming_catalogue()
-    assert len(catalogue) == len(expected_ids) == 41
+    assert len(catalogue) == len(expected_ids) == 43
     assert {row["parameter_set"] for row in catalogue} == expected_ids
     for scheme, sets in EXPECTED.items():
         assert set(HammingScheme(scheme).parameter_sets) == set(sets)
@@ -154,7 +156,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert copied["parameters"]["wx"] == [44, 41]
     assert copied["references"]
     attacks = hamming_instances()
-    assert len(attacks) == len({attack.name for attack in attacks}) == 117
+    assert len(attacks) == len({attack.name for attack in attacks}) == 123
 
 
 @pytest.mark.parametrize("doom", ["auto", "none"])

@@ -28,6 +28,12 @@ def estimate(
 
             classical_model = ClassicalModel()
             backends["classical"] = backend_info()
+            if (instance.problem.kind == "rank_scheme" or any(
+                    name.startswith("Rank-") for name in options.classical_algorithms or ())):
+                backends["classical"]["local_rank"] = {
+                    "implementation": "rank_sd_estimator.py / rank_sd_schemes.py",
+                    "resource_scope": "time_only",
+                }
         else:
             backends["classical"] = {"name": classical_model.name}
         results.extend(classical_model.estimate(instance, options))
@@ -42,7 +48,7 @@ def estimate(
                 "implementation": "heuristic finite time estimates",
                 "cost_model": cost_model_for_profile(options.quantum_matrix_profile),
                 "matrix_profile": options.quantum_matrix_profile,
-                "implemented_algorithms": ["QPrange", "QSS", "QMMT+"],
+                "implemented_algorithms": list(QuantumModel.supported_algorithms),
                 "pending_algorithms": [],
                 "resource_scope": "time_only",
             }

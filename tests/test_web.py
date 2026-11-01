@@ -89,7 +89,7 @@ def test_catalogue_and_route_preview_preserve_domain_provenance(tmp_path):
         assert status == 200
         assert data["limits"]["job_seconds"] is None
         assert "Mito" in data["schemes"]
-        assert data["algorithms"]["quantum"] == ["QPrange", "QSS", "QMMT+"]
+        assert data["algorithms"]["quantum"] == ["QPrange", "QSS", "QMMT+", "Rank-WT23"]
         assert "Prange" in data["algorithm_families"]["binary"]
         assert "MAGE-Stern" in data["algorithm_families"]["binary"]
         selected = next(row for row in data["parameter_sets"] if row["scheme"] == "HARE")
@@ -119,6 +119,43 @@ def test_http_runs_real_estimator_and_returns_comparisons(tmp_path):
         assert comparison["conclusions"]["classical"]["best"][0]["estimate"] == result
         status, unchanged, _ = request(server, "DELETE", f"/api/jobs/{started['id']}")
         assert status == 200 and unchanged["status"] == "completed"
+
+
+@pytest.mark.parametrize("scheme", ["BAG-Loong", "BAG-Piglet", "BRA", "BRQC", "C-Multi-UR-AG"])
+def test_rank_catalogue_routes_and_background_jobs(tmp_path, scheme):
+    body = {"mode": "catalogue", "scheme": scheme, "parameter_set": f"{scheme}-128",
+            "goal": "both", "options": {"classical_algorithms": ["Rank-OJ"],
+                                         "quantum_algorithms": []}}
+    with running_server(tmp_path) as server:
+        status, preview, _ = request(server, "GET", "/api/routes?scheme=" + scheme
+                                     + "&parameter_set=" + scheme + "-128&goal=both")
+        assert status == 200
+        assert len(preview["instances"]) == 2
+        assert preview["availability"]["classical"]["Rank-OJ"]["available"]
+        assert not preview["availability"]["classical"]["Prange"]["available"]
+        assert not any(row["available"] for row in preview["availability"]["quantum"].values())
+        status, started, _ = request(server, "POST", "/api/jobs", body)
+        assert status == 202
+        job = wait_for_job(server, started["id"])
+        assert job["status"] == "completed", job
+        assert job["progress"] == {"completed": 2, "total": 2}
+        assert {report["instance"]["goal"] for report in job["reports"]} == {
+            "key_recovery", "msg_recovery"}
+        for report in job["reports"]:
+            result, = report["results"]
+            assert result["algorithm"] == "Rank-OJ" and result["status"] == "computed"
+            assert result["memory_log2"] is None and result["memory_unit"] == "not_estimated"
+            assert report["conclusions"]["classical"]["best"] == [result]
+        assert len(job["comparisons"]) == 2
+        json.dumps(job, allow_nan=False)
+
+
+def test_rank_whole_scheme_selection_and_default_algorithm():
+    instances, options = prepare_job({"scheme": "BAG-Piglet", "scope": "scheme", "goal": "both"})
+    assert len(instances) == 8
+    assert options.classical_algorithms == ("Rank-OJ",)
+    assert options.quantum_algorithms == ()
+    assert len({instance.name for instance in instances}) == 8
 
 
 @pytest.mark.parametrize("block", [False, True])
@@ -228,6 +265,7 @@ def test_availability_never_runs_parameter_optimization(monkeypatch):
     for name in ("time_complexity", "memory_complexity", "_find_optimal_parameters", "get_optimal_parameters_dict"):
         monkeypatch.setattr(BaseAlgorithm, name, forbidden)
     for target in ("codebased_estimator.quantum.optimize", "codebased_estimator.mage_search.optimize",
+                   "codebased_estimator.rank.RankModel.estimate_algorithm",
                    "codebased_estimator.classical_doom.estimate_doom", "codebased_estimator.backend._seed_bounded_m4ri",
                    "codebased_estimator.qprange.evaluate_qprange"):
         monkeypatch.setattr(target, forbidden)
@@ -296,7 +334,8 @@ def test_availability_excludes_wrong_families_and_quantum(kind, parameters, expe
         assert supported == expected_classical
     else:
         assert "GRS" in supported and "Prange" not in supported
-    assert not any(item["available"] for item in availability["quantum"].values())
+    quantum = {name for name, item in availability["quantum"].items() if item["available"]}
+    assert quantum == ({"Rank-WT23"} if kind == "rank_sd" else set())
     assert not availability["classical"]["MAGE-Stern"]["available"]
 
 

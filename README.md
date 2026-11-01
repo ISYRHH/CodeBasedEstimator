@@ -1,6 +1,6 @@
 # CodeBasedEstimator
 
-编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、MAGE-Stern 和二元 SD 的 QPrange／QSS／QMMT+ 量子估计；内置 9 个方案、41 组参数。成本口径见[模型说明](docs/model.md)，QPrange 及其块画像的范围见[使用说明](docs/qprange.md)，参数版本与差异见[参数说明](docs/parameter_consistency.md)。
+编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、MAGE-Stern 和二元 SD 的 QPrange／QSS／QMMT+ 量子估计；内置 9 个 Hamming 方案（43 组参数）和 5 个 Rank 方案（17 组参数）。成本口径见[模型说明](docs/model.md)，QPrange 及其块画像的范围见[使用说明](docs/qprange.md)，参数版本与差异见[参数说明](docs/parameter_consistency.md)。
 
 ## 安装
 
@@ -25,7 +25,7 @@ python3 -m venv .venv
 - **Evaluate → All parameter sets in this scheme** 批量估计当前方案；**Both** 覆盖两种恢复目标。结果按参数组、恢复目标和成本类别分别比较。
 - **Parameters** 查看来源，**Recovery routes** 查看映射，**Results** 查看详情并导出 JSON／CSV；**History** 保留当前浏览器最近 10 次完成的运行。
 
-网页默认只选 Prange，直接调用 Python 引擎。服务仅监听本机回环地址，最多同时运行 2 项任务；任务不限时，可随时取消。更新后端代码后需重启服务；历史报告保留运行时的结果。
+网页默认只选 Prange，直接调用 Python 引擎。选择 BAG-Loong、BAG-Piglet、BRA、BRQC 或 C-Multi-UR-AG 后，可勾选对应的 `Rank-*` 算法。服务仅监听本机回环地址，最多同时运行 2 项任务；任务不限时，可随时取消。更新后端代码后需重启服务；历史报告保留运行时的结果。
 
 ## 命令行
 
@@ -45,14 +45,24 @@ python3 -m venv .venv
   --classical-algorithms Prange Stern --quantum-algorithms --json
 ```
 
-CLI 默认运行已注册的经典与量子候选；算法选项后留空可关闭该类别。`hamming` 默认 `--doom auto`，`--doom none` 关闭多目标。目标数和每综合征解数是不同输入，定义见[输入与计量](docs/model.md#输入与计量)；完整选项见各子命令的 `--help`。
+查看 Rank 参数及路线，或运行一个参数组：
+
+```sh
+.venv/bin/python -m codebased_estimator rank --list
+.venv/bin/python -m codebased_estimator rank --schemes BAG-Loong --list-routes
+.venv/bin/python -m codebased_estimator rank --parameter-sets BAG-Loong-128 \
+  --goal key_recovery --classical-algorithms Rank-OJ --json
+```
+
+`rank` 默认运行所选方案的经典候选，量子候选默认关闭；可用 `--csv` 导出逐算法结果。其他 CLI 默认运行已注册的经典与量子候选；算法选项后留空可关闭该类别。`hamming` 默认 `--doom auto`，`--doom none` 关闭多目标。目标数和每综合征解数是不同输入，定义见[输入与计量](docs/model.md#输入与计量)；完整选项见各子命令的 `--help`。
 
 已知各块重量的路线默认启用 `--unbalanced auto`，修正外层成功概率并重新优化；`--unbalanced none` 使用总重量基线。适用范围见[外层块概率](docs/model.md#unbalanced-外层块概率)。
 
 ## 输出
 
 - 时间／内存为 log₂ 值；经典单位为位操作／bits，量子时间为 `quantum_bit_operations`，量子内存未估计。结果是所选路线的模型成本，不代表设备耗时或方案安全位数。
-- `--json` 输出完整报告，`hamming --csv` 输出逐算法摘要；`--no-brief` 补充路线、解数、实际使用的目标数及来源。
+- 新接入的本地 Rank 算法只输出时间，内存显示为未估计；设置 `--memory-bound` 时，这些经典结果不参与最小值选择。
+- `--json` 输出完整报告，`hamming --csv`／`rank --csv` 输出逐算法摘要；`--no-brief` 补充路线、解数、实际使用的目标数及来源。
 
 ## Python API
 
@@ -63,6 +73,17 @@ options = Options(classical_algorithms=("Stern",), quantum_algorithms=())
 instances = hamming_instances(parameter_sets=["Mito-1-128"], goal="key_recovery")
 reports = [estimate(instance, options=options) for instance in instances]
 print(compare_routes(reports)[0].to_dict())
+```
+
+Rank 方案使用同一个 `estimate` 入口：
+
+```python
+from codebased_estimator import Options, estimate, rank_instances
+
+instance, = rank_instances(parameter_sets=["BAG-Loong-128"], goal="key_recovery")
+report = estimate(instance, options=Options(
+    classical_algorithms=("Rank-OJ",), quantum_algorithms=()))
+print(report.to_dict())
 ```
 
 自定义输入使用 `AttackInstance.from_dict(...)`。已知块重量可用 `BlockProfile` 或 JSON 的 `block_profile` 指定，定义见[外层块概率](docs/model.md#unbalanced-外层块概率)。路线比较仅覆盖已估计的候选。
