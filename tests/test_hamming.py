@@ -304,7 +304,7 @@ def test_cli_csv_has_numeric_costs_only_for_available_routes(capsys):
     records = list(csv.DictReader(io.StringIO(capsys.readouterr().out)))
     assert len(records) == 10
     assert set(records[0]) == {
-        "scheme", "parameter_set", "goal", "n", "k", "w", "q", "model",
+        "scheme", "parameter_set", "goal", "n", "k", "w", "q", "m", "r", "model",
         "algorithm", "status", "time_log2", "memory_log2", "time_unit",
         "memory_unit", "is_best", "reason", "cost_model", "matrix_profile", "matrix_block_size",
         "problem_kind", "doom", "targets", "active_targets",
