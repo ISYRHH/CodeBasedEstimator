@@ -90,12 +90,20 @@ select:disabled { color: var(--muted); background-color: var(--panel); cursor: n
 #catalogue-fields { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
 #catalogue-fields > label { grid-row: 1; }
 #catalogue-fields > select { grid-row: 2; }
+.source-usage { grid-column: 1 / -1; margin-top: 10px; font-size: 14px; }
 .scope-field { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; margin-top: 16px; }
 .scope-field label { margin: 0; }
 .scope-field select { width: auto; max-width: 100%; }
 .source-preview { grid-column: 1 / -1; margin-top: 14px; }
 .source-preview summary { color: var(--muted); font-size: 14px; }
 .source-preview summary span { margin-left: 8px; }
+.source-parameter-groups { display: grid; gap: 20px; margin-top: 12px; min-width: 0; }
+.source-parameter-group { min-width: 0; }
+.source-parameter-group > strong { display: block; margin-bottom: 8px; font-size: 14px; }
+.source-parameter-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 12px; margin: 0; }
+.source-parameter-list > div { min-width: 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; }
+.source-parameter-list dt { color: var(--muted); font: 13px/1.5 var(--mono); overflow-wrap: anywhere; }
+.source-parameter-list dd { margin: 4px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .parameter-chips { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: 8px; }
 .parameter-chip { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .parameter-chip b { font-weight: 600; }
@@ -204,6 +212,7 @@ thead th { background: var(--panel); border-top: 1px solid var(--line); font-wei
 .library-table td:first-child { min-width: 165px; }
 .library-table td:last-child { white-space: nowrap; }
 .library-table details { font-size: 14px; margin-top: 6px; }
+.library-table .example-badge { display: block; margin-top: 4px; }
 .library-table details p { color: var(--muted); margin-top: 8px; }
 #history-list { margin-top: 22px; }
 .history-card { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding-block: 18px; border-bottom: 1px solid var(--line); }

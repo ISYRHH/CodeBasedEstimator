@@ -158,7 +158,10 @@ function populateSets(preferred) {
 function sourcePreview() {
   const batch = $("evaluation-scope").value === "scheme";
   const rows = state.catalogue.parameter_sets.filter((entry) => entry.scheme === $("scheme").value && (batch || entry.parameter_set === $("parameter-set").value));
-  $("source-parameters").innerHTML = rows.map((row) => `<div>${batch ? `<strong>${escapeHTML(row.parameter_set)}</strong><div class="parameter-chips">` : ""}${chips(row.parameters)}${batch ? "</div>" : ""}</div>`).join("");
+  $("source-usage").hidden = !rows.some((row) => row.usage === "example");
+  const fields = (parameters) => Object.entries(parameters).map(([key, value]) =>
+    `<div><dt>${escapeHTML(key)}</dt><dd>${escapeHTML(Array.isArray(value) ? JSON.stringify(value) : value)}</dd></div>`).join("");
+  $("source-parameters").innerHTML = rows.map((row) => `<div class="source-parameter-group">${batch ? `<strong>${escapeHTML(row.parameter_set)}</strong>` : ""}<dl class="source-parameter-list">${fields(row.parameters)}</dl></div>`).join("");
   optionalText("source-count", batch ? `${rows.length} parameter sets` : rows[0] ? `${Object.keys(rows[0].parameters).length} fields` : "");
   let notes = $("source-notes");
   if (!notes) {
@@ -508,7 +511,7 @@ function renderLibrary() {
   const query = $("library-search").value.toLowerCase().trim();
   const rows = state.catalogue.parameter_sets.filter((row) => `${row.scheme} ${row.parameter_set}`.toLowerCase().includes(query));
   optionalText("library-count", `${rows.length} parameter sets`);
-  $("library-body").innerHTML = rows.length ? rows.map((row) => `<tr><td>${escapeHTML(row.parameter_set)}<details><summary>Source &amp; notes</summary>${[...row.references,...(row.notes || [])].map((note) => `<p>${escapeHTML(note)}</p>`).join("")}</details></td><td>${escapeHTML(row.scheme)}</td><td><div class="parameter-chips">${chips(row.parameters)}</div></td><td><button class="button secondary small" data-load-set="${escapeHTML(row.parameter_set)}">Use set</button></td></tr>`).join("") : '<tr><td colspan="4">No matching parameter sets.</td></tr>';
+  $("library-body").innerHTML = rows.length ? rows.map((row) => `<tr><td>${escapeHTML(row.parameter_set)}${row.usage === "example" ? '<span class="badge example-badge">Estimator example</span>' : ""}<details><summary>Source &amp; notes</summary>${[...row.references,...(row.notes || [])].map((note) => `<p>${escapeHTML(note)}</p>`).join("")}</details></td><td>${escapeHTML(row.scheme)}</td><td><div class="parameter-chips">${chips(row.parameters)}</div></td><td><button class="button secondary small" data-load-set="${escapeHTML(row.parameter_set)}">Use set</button></td></tr>`).join("") : '<tr><td colspan="4">No matching parameter sets.</td></tr>';
 }
 
 function renderHistory() {

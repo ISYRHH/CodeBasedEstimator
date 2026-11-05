@@ -1,4 +1,4 @@
-"""Submission decoding routes with scheme-specific DOOM target semantics.
+"""Scheme decoding routes with scheme-specific DOOM target semantics.
 
 The parameter catalogue contains a self-contained, reviewed parameter snapshot.
 """
@@ -17,14 +17,14 @@ from .unbalanced import BlockProfile
 
 HAMMING_SCHEMES = (
     "BIKE_MLThre", "TRIKE", "HARE", "HEP-QC", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE",
-    "QCTM", "UVW-KEM",
+    "QCTM", "UVW-KEM", "HQC",
 )
 GOALS = ("key_recovery", "msg_recovery")
 # Resolve all classical candidates in the appropriate upstream field backend.
 DEFAULT_HAMMING_ALGORITHMS = None
 DOOM_MODES = ("auto", "none")
 UNBALANCED_MODES = ("auto", "none")
-COMPOSITE_MSG_SCHEMES = ("HARE", "HEP-QC", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE")
+COMPOSITE_MSG_SCHEMES = ("HARE", "HEP-QC", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE", "HQC")
 
 _ASSUMPTIONS = (
     "Decoding cost only; scheme-level recovery, validation and support correlations are not modeled.",
@@ -207,7 +207,7 @@ class HammingScheme:
             elif scheme == "TRIKE":
                 n, k, w = 3 * p["r"], (2 if key else 1) * p["r"], p["w"] if key else p["t"]
                 formula = "(3r,2r,w)" if key else "(3r,r,t)"
-            elif scheme in ("HARE", "HEP-QC"):
+            elif scheme in ("HARE", "HEP-QC", "HQC"):
                 n, k, w = 2 * p["r"], p["r"], 2 * (p["w"] if key else p["wr"])
                 formula = "(2r,r,2w)" if key else "(2r,r,2wr)"
             elif scheme == "NSS-HQC":
@@ -290,6 +290,25 @@ class HammingScheme:
         for instance in instances:
             profile = instance.block_profile if unbalanced == "auto" else None
             notes = instance.assumptions
+            if scheme == "HQC":
+                notes += (
+                    "Estimator example using HQC specification 2026-10-12; these are decoding subproblem costs, not claimed HQC security levels.",
+                    "The public fixed-weight parities are not used to reduce the generic SD dimensions.",
+                )
+                if key:
+                    notes += (
+                        "Recovers a sparse pair (x,y) from s=x+h*y; recovery of the compressed seedKEM is not modeled.",
+                    )
+                elif instance.route_id == "u_only":
+                    notes += (
+                        "After recovering r2, message recovery still requires public concatenated-code decoding of v-Truncate(s*r2) and candidate validation; this postprocessing cost is not included.",
+                    )
+                else:
+                    notes += (
+                        "HQC transmits only L=code_length coordinates of v; the missing r-L tail and the message mask Encode(m) are supplied for free in this conditional full-length core.",
+                        "The r cyclic targets belong only to that supplied core; they are not a DOOM orbit of the actual truncated unknown-message ciphertext.",
+                    )
+                    instance = replace(instance, route="Conditional full-length known-mask core: (n,k,w)=(3r,r,2wr+we)")
             if scheme == "HEP-QC":
                 if key:
                     notes += (

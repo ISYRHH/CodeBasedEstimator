@@ -4,6 +4,9 @@ HEP-QC added on 2026-11-03; TRIKE updated to v1.6 on 2026-10-20;
 Mito/QUBE reconciled on 2026-10-14.
 See docs/parameter_consistency.md.
 
+HQC is an estimator example, using specification 2026-10-12, Table 8.
+Its n2 byte length is converted to bits to match the catalogue convention.
+
 References identify the specification version or reference parameter set.
 These are input parameters, not claimed security bits.
 Legacy/specification-only sets are explicitly noted; compile-time overrides
@@ -314,4 +317,34 @@ HAMMING_PARAMETERS = [{'scheme': 'BIKE_MLThre',
   'parameters': {'n': 3412, 'k1': 853, 'k2': 853, 'w': 463, 'q': 1709},
   'references': ['UVW-KEM reference parameters'],
   'notes': ['Nonbinary syndrome decoding over Fq uses k = k1+k2. Key recovery requires a structured-codeword '
-            'distinguisher and is unsupported.']}]
+            'distinguisher and is unsupported.']},
+ {'scheme': 'HQC',
+  'parameter_set': 'HQC-1',
+  'usage': 'example',
+  'parameters': {'r': 17669, 'w': 67, 'wr': 76, 'we': 76,
+                 'n1': 46, 'n2': 384, 'code_length': 17664, 'message_bits': 128},
+  'references': ['HQC specification 2026-10-12, Table 8; official reference parameters'],
+  'notes': ['HQC is included as an estimator example.',
+            'r is the specification n; w, wr and we are per-block weights.',
+            'n2 is measured in bits here; the specification n2 is 48 bytes.',
+            'The ciphertext v is truncated to code_length bits; composite is a conditional full-length known-mask core.']},
+ {'scheme': 'HQC',
+  'parameter_set': 'HQC-3',
+  'usage': 'example',
+  'parameters': {'r': 35851, 'w': 101, 'wr': 114, 'we': 114,
+                 'n1': 56, 'n2': 640, 'code_length': 35840, 'message_bits': 192},
+  'references': ['HQC specification 2026-10-12, Table 8; official reference parameters'],
+  'notes': ['HQC is included as an estimator example.',
+            'r is the specification n; w, wr and we are per-block weights.',
+            'n2 is measured in bits here; the specification n2 is 80 bytes.',
+            'The ciphertext v is truncated to code_length bits; composite is a conditional full-length known-mask core.']},
+ {'scheme': 'HQC',
+  'parameter_set': 'HQC-5',
+  'usage': 'example',
+  'parameters': {'r': 57637, 'w': 132, 'wr': 150, 'we': 150,
+                 'n1': 90, 'n2': 640, 'code_length': 57600, 'message_bits': 256},
+  'references': ['HQC specification 2026-10-12, Table 8; official reference parameters'],
+  'notes': ['HQC is included as an estimator example.',
+            'r is the specification n; w, wr and we are per-block weights.',
+            'n2 is measured in bits here; the specification n2 is 80 bytes.',
+            'The ciphertext v is truncated to code_length bits; composite is a conditional full-length known-mask core.']}]

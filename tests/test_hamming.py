@@ -91,6 +91,11 @@ EXPECTED = {
         "UVW-KEM-256": (1708, None, None, 854, 232, 857),
         "UVW-KEM-512": (3412, None, None, 1706, 463, 1709),
     },
+    "HQC": {
+        "HQC-1": (35338, 17669, 134, 17669, 152, 2),
+        "HQC-3": (71702, 35851, 202, 35851, 228, 2),
+        "HQC-5": (115274, 57637, 264, 57637, 300, 2),
+    },
 }
 
 
@@ -105,6 +110,7 @@ EXPECTED_TARGETS = {
     "QUBE": [13109, 25357, 41651, 82757, 135851],
     "QCTM": [19, 19, 19],
     "UVW-KEM": [1, 1, 1],
+    "HQC": [17669, 35851, 57637],
 }
 
 
@@ -152,7 +158,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert set(HAMMING_SCHEMES) == set(EXPECTED)
     expected_ids = {parameter_set for sets in EXPECTED.values() for parameter_set in sets}
     catalogue = hamming_catalogue()
-    assert len(catalogue) == len(expected_ids) == 47
+    assert len(catalogue) == len(expected_ids) == 50
     assert {row["parameter_set"] for row in catalogue} == expected_ids
     for scheme, sets in EXPECTED.items():
         assert set(HammingScheme(scheme).parameter_sets) == set(sets)
@@ -163,7 +169,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert copied["parameters"]["wx"] == [44, 41]
     assert copied["references"]
     attacks = hamming_instances()
-    assert len(attacks) == len({attack.name for attack in attacks}) == 135
+    assert len(attacks) == len({attack.name for attack in attacks}) == 144
 
 
 @pytest.mark.parametrize("doom", ["auto", "none"])

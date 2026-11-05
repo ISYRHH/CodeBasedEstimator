@@ -159,6 +159,35 @@ test("library loading keeps the visible source controls enabled despite a hidden
   assert.equal(ui.get("param-n").disabled, true);
 });
 
+test("HQC library entries load as estimator examples for individual sets and scheme batches", () => {
+  const ui = catalogueWorkspace();
+  ui.context.hqcCatalogue = {
+    ...catalogue,
+    parameter_sets:[...catalogue.parameter_sets, ...[1,3,5].map((level) => ({
+      scheme:"HQC",parameter_set:`HQC-${level}`,usage:"example",parameters:{r:17669},
+      references:["HQC specification 2026-10-12"],notes:["Estimator example."],
+    }))],
+  };
+  ui.evaluate("state.catalogue = hqcCatalogue; renderLibrary()");
+  assert.equal((ui.get("library-body").innerHTML.match(/class="badge example-badge"/g) || []).length, 3);
+  for (const level of [1,3,5]) {
+    const load = ui.element();
+    load.dataset.loadSet = `HQC-${level}`;
+    ui.click(load);
+    assert.equal(ui.get("scheme").value, "HQC");
+    assert.equal(ui.get("parameter-set").value, `HQC-${level}`);
+    assert.equal(ui.get("source-usage").hidden, false);
+    assert.equal(ui.evaluate("algorithmFamily()"), "binary");
+  }
+  ui.get("evaluation-scope").value = "scheme";
+  ui.evaluate("sourcePreview()");
+  assert.equal(ui.get("source-usage").hidden, false);
+  assert.equal(ui.get("source-count").textContent, "3 parameter sets");
+  ui.get("scheme").value = "Binary";
+  ui.evaluate("populateSets('Binary-1')");
+  assert.equal(ui.get("source-usage").hidden, true);
+});
+
 test("custom input visibility disables only irrelevant problem fields", () => {
   const ui = workspace();
   ui.evaluate("view('history'); setMode('custom')");

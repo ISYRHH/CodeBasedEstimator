@@ -42,13 +42,14 @@
               <select id="scheme" name="scheme" required><option value="">Loading…</option></select>
               <label for="parameter-set">Parameter set</label>
               <select id="parameter-set" name="parameter_set" required></select>
+              <p id="source-usage" class="source-usage muted" hidden>Estimator example</p>
               <div class="scope-field">
                 <label for="evaluation-scope">Evaluate</label>
                 <select id="evaluation-scope"><option value="parameter_set">Selected parameter set</option><option value="scheme">All parameter sets in this scheme</option></select>
               </div>
               <details class="source-preview">
                 <summary>Source parameters <span class="muted" id="source-count"></span></summary>
-                <div id="source-parameters" class="parameter-chips"></div>
+                <div id="source-parameters" class="source-parameter-groups"></div>
               </details>
             </div>
             <div id="custom-fields" hidden>
