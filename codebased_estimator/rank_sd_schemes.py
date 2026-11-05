@@ -100,6 +100,11 @@ def E_minors(m, nvec, k, rvec):
 # ============================================================
 
 def cmulti_mm(m, n, k, r, omega=2.0):
+    """单块 MM：T = q^{ar} · m·C(n-k-1,r) · C(n-a,r)^(ω-1)，可行性门槻 E >= U-1。
+
+    2026-11-02 修复：原实现把成本写为 guess+logE+logU，漏乘 (ω-1)；
+    ω=2 时两者一致，ω≠2 时会低估成本（外部审计项 B3）。
+    """
     nn = n - k - 1
     if nn < r or n < r:
         return inf, None
@@ -110,7 +115,7 @@ def cmulti_mm(m, n, k, r, omega=2.0):
             break
         if lhs < lcomb(n - a, r) - 1e-9:
             continue
-        c = a * r * lg(2) + lg(m) + lcomb(nn, r) + lcomb(n - a, r)
+        c = a * r * lg(2) + lg(m) + lcomb(nn, r) + (omega - 1) * lcomb(n - a, r)
         if c < best:
             best, ba = c, a
     return best, ba
@@ -246,6 +251,14 @@ def loong_prr(n, n1, t1, t2, g, m, instance, omega=2.8):
         return best
 
 def loong_mm(n, n1, t1, t2, g, m, instance, omega=2.8):
+    """BAG-Loong 定理 3.4 的块状 MM（混合块；ω=2.8）。
+
+    2026-11-05 修复（外部审计项 B1）：方程计数 N2 的列数恢复为 Ncol = d2 - 1，
+    即使用原码维数 k = d1（规范 Model 1 中增广码 C_y = C + <y> 的校验矩阵
+    已扣除一维，本地旧版先写成 d1+1 又减 1，得到 d2-2，与定理 3.4 的
+    N2 = C(d2-1, t) 相比多扣了一维）。修复后 8 个 Key/Message 值见
+    schemes_final_output.txt 与 tex/audit2.tex。
+    """
     if instance == 1:
         d1, d2 = n, n
     else:
@@ -257,7 +270,7 @@ def loong_mm(n, n1, t1, t2, g, m, instance, omega=2.8):
     if T2v <= 0:
         return None
     T2 = lg(T2v)
-    Ncol = d1 + d2 - (d1 + 1) - 1
+    Ncol = d2 - 1                     # B1：原码维数；增广已计入 -1，不再重复扣除
     if Ncol < t:
         return None
     N2 = lcomb(Ncol, t)
@@ -280,6 +293,54 @@ def loong_mm(n, n1, t1, t2, g, m, instance, omega=2.8):
             c = gexp * lg(2) + lg(m) + N2 + (omega - 1) * T2a
             best = min(best, c)
     return best
+
+def bra_mm_local_search(m, nvec, k, rvec, a0, p0, omega=2.0, pmax=40,
+                        steps=(1, 2, 4, 8, 16)):
+    """BRA/BRQC 块状 MM 的显式局部搜索模式（2026-11-05 外部审计项 C3 后新增）。
+
+    从起点 (a0, p0) 做坐标下降：每轮沿一个猜零或穿刺坐标尝试 ±steps 的移动，
+    接受通过 E >= U-1 门槛且降低成本的点，直到无改进为止。记录的搜索范围：
+    0 <= a_i（Σa_i <= k），0 <= p_i <= pmax，h = 0，原始块序。这是有限
+    启发式搜索，不声称全局最优；固定点复现模式（不搜索）仍由调用方保留。
+
+    返回 (cost, a, p)；若起点与零元组均不可行，返回 (None, 0向量, 0向量)。
+    """
+    l = len(nvec)
+
+    def cost(a, pp):
+        r = bra_mm_at(m, nvec, k, rvec, a, pp, [0] * l)
+        return None if r is None else r[0]
+
+    cur_a, cur_p = [x for x in a0], [x for x in p0]
+    best = cost(cur_a, cur_p)
+    if best is None:
+        cur_a, cur_p = [0] * l, [0] * l
+        best = cost(cur_a, cur_p)
+        if best is None:
+            return None, cur_a, cur_p
+    improved = True
+    while improved:
+        improved = False
+        for i in range(l):
+            for st in steps:
+                for sgn in (1, -1):
+                    a2 = list(cur_a)
+                    a2[i] += sgn * st
+                    if a2[i] < 0 or sum(a2) > k:
+                        continue
+                    c = cost(a2, cur_p)
+                    if c is not None and c < best - 1e-9:
+                        best, cur_a, improved = c, a2, True
+            for st in steps:
+                for sgn in (1, -1):
+                    p2 = list(cur_p)
+                    p2[i] += sgn * st
+                    if p2[i] < 0 or p2[i] > pmax:
+                        continue
+                    c = cost(cur_a, p2)
+                    if c is not None and c < best - 1e-9:
+                        best, cur_p, improved = c, p2, True
+    return best, cur_a, cur_p
 
 # ============================================================
 # BAG-Piglet（ω=2.8）
@@ -412,6 +473,18 @@ def bra_prr(nvec, k, rvec, m, omega=2.0):
     n = sum(nvec); l = len(nvec)
     M = m * (n - k - 1)
     best = inf
+    if l == 1:
+        # 单块：只有一个枚举维度，不再附加“末块”（2026-11-02 修复外部审计项 B4：
+        # 原实现把单块元组当前缀后又饱和一个末块，多计一个不存在的块，
+        # 例如 bra_prr([30],10,[3],20,2) 曾返回 30.14，正确值为 21.14）。
+        n0, r0 = nvec[0], rvec[0]
+        u_s = min(m, M // n0) if n0 > 0 else -1
+        if u_s >= r0:
+            best = min(best, omega * lg(M) + (r0 * (m - u_s) - m) * lg(2))
+        u_c = min(n0, n - k)
+        if u_c >= r0:
+            best = min(best, 2 * lg(m) + omega * lg(n - k) + (r0 * (n0 - u_c)) * lg(2))
+        return best
     # PRR-S：t_i ∈ [r_i, m]；Σt ≤ m；Σ n_i t_i ≤ M；末维饱和
     if l == 1:
         cand = [range(rvec[0], m + 1)]
@@ -481,6 +554,16 @@ def bra_oj_s(nvec, k, rvec, m, omega=2.0):
     return omega * lg(m * N) + (m - r) * (r - 1) * lg(2), N
 
 def bra_mm_at(m, nvec, k, rvec, a, p, h, omega=2.0):
+    """块状 MM：T = q^(Σa_i(r_i-h_i)+Σh_i(n_i-h_i)) · E · U^(ω-1)，
+
+    其中 U = ∏_i C(n_i-a_i-p_i-h_i, r_i-h_i)（各块子式数之积，对数域求和），
+    E 为块状扩展系统的独立方程计数上界（E_minors）。
+
+    2026-11-02 修复（外部审计项 B1）：加入方程数门槛 E >= U-1；
+    不满足时返回 None。此前函数不做该检查而调用方也未检查，四条不满足
+    门槛的预置参数（BRA-128/256 与 BRQC-128/256 的 3n 实例）曾被当作
+    正常攻击成本写入表格。
+    """
     l = len(nvec)
     nred = [nvec[i] - a[i] - p[i] - h[i] for i in range(l)]
     rred = [rvec[i] - h[i] for i in range(l)]
@@ -494,6 +577,8 @@ def bra_mm_at(m, nvec, k, rvec, a, p, h, omega=2.0):
         return None
     logE, _ = res
     U = sum(lcomb(nred[i], rred[i]) for i in range(l))
+    if logE < U - 1e-9:          # E >= U-1（对数域；U 极大时 log2(U-1)=U）
+        return None
     guess = sum(a[i] * (rvec[i] - h[i]) + h[i] * (nvec[i] - h[i]) for i in range(l))
     cost = guess * lg(2) + logE + (omega - 1) * U
     return cost, logE, U
@@ -535,6 +620,70 @@ def selftest():
         ok += good; bad += (not good)
         print(f"  [{'PASS' if good else 'FAIL'}] E m={m} n={nvec} k={k} r={rvec}: got {got} want {want}")
     print(f"E checks: {ok} pass, {bad} fail")
+
+    # ------------------------------------------------------------------
+    # 回归检查（2026-11-02 外部审计后新增；覆盖审计项 B1/B3/B4/S2）
+    # ------------------------------------------------------------------
+    print("audit regression checks:")
+    npass = nfail = 0
+
+    def acheck(name, cond, extra=""):
+        nonlocal npass, nfail
+        npass += bool(cond); nfail += (not cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {name} {extra}")
+
+    infeasible = [
+        (67, [121, 121, 121], 121, [5, 8, 5], (0, 0, 0), (1, 1, 2)),
+        (83, [161, 161, 161], 161, [6, 8, 6], (5, 5, 5), (0, 0, 0)),
+        (127, [119, 119, 119], 119, [5, 8, 5], (0, 0, 0), (0, 0, 32)),
+        (163, [161, 161, 161], 161, [6, 8, 7], (7, 1, 2), (0, 0, 0)),
+    ]
+    for (m, nvec, k, rvec, a, pp) in infeasible:
+        r = bra_mm_at(m, nvec, k, rvec, list(a), list(pp), [0] * len(nvec))
+        acheck(f"B1: 不可行 MM 预置被拒绝 r={rvec} p={pp}", r is None)
+    feasible = [
+        (67, [121, 121, 121], 121, [8, 5, 5], (0, 0, 0), (1, 1, 2), 189.145156),
+        (83, [161, 161, 161], 161, [8, 6, 6], (5, 5, 5), (0, 0, 0), 321.764517),
+        (127, [119, 119, 119], 119, [5, 8, 5], (0, 0, 0), (0, 32, 0), 181.734078),
+        (163, [161, 161, 161], 161, [8, 6, 7], (1, 7, 2), (0, 0, 0), 295.370985),
+    ]
+    for (m, nvec, k, rvec, a, pp, want) in feasible:
+        r = bra_mm_at(m, nvec, k, rvec, list(a), list(pp), [0] * len(nvec))
+        got = None if r is None else r[0]
+        acheck(f"B1: 可行替代参数成本 r={rvec}",
+               r is not None and abs(got - want) < 1e-4,
+               f"(got {None if got is None else round(got, 6)}, want {want})")
+    c28 = cmulti_mm(79, 70, 35, 8, omega=2.8)[0]
+    acheck("B3: cmulti_mm 成本含 (ω-1) 因子", abs(c28 - 197.144482) < 1e-3,
+           f"(omega=2.8 -> {c28:.6f}，修复前 172.821486)")
+    c20 = cmulti_mm(79, 70, 35, 8, omega=2.0)[0]
+    acheck("B3: omega=2 结果不变", abs(c20 - 172.821486) < 1e-5, f"({c20:.6f})")
+    got = bra_prr([30], 10, [3], 20, 2.0)
+    acheck("B4: 单块 PRR 满足自身约束", abs(got - 21.139711) < 1e-5,
+           f"(got {got:.6f}，修复前 30.139711)")
+    acheck("S2: Piglet 早期返回反例（保留启发式，已复核 8 组预置）",
+           abs(piglet_mm_31(4, (1, 1, 1), 5) - 18.209391) < 1e-5,
+           "(n=4,m=5 反例：可行 (a)=(3,3,0) 更低；预置不受影响)")
+    # 2026-11-05 审计回归（B1：Ncol=d2-1；B3：ω=2.81 验收值）
+    loong_fixed = [
+        (128, 42, 47, 10, (5, 5), 4, 1, 122.225024),
+        (128, 42, 47, 10, (5, 5), 3, 2, 120.522407),
+        (256, 65, 67, 12, (5, 6), 3, 1, 221.547030),
+        (256, 65, 67, 12, (6, 6), 3, 2, 234.680243),
+        (384, 83, 83, 14, (6, 6), 3, 1, 310.346288),
+        (384, 83, 83, 14, (7, 7), 4, 2, 349.086593),
+        (512, 104, 97, 15, (7, 7), 4, 1, 450.843747),
+        (512, 104, 97, 15, (7, 7), 4, 2, 393.534519),
+    ]
+    for (lvl, n, m, n1, tt, g, inst, want) in loong_fixed:
+        got = loong_mm(n, n1, tt[0], tt[1], g, m, inst)
+        acheck(f"B1: BAG-Loong MM L{lvl} inst{inst}", abs(got - want) < 1e-4,
+               f"(got {got:.6f}, want {want})")
+    c281 = cmulti_mm(79, 70, 35, 8, omega=2.81)[0]
+    acheck("B3: cmulti_mm omega=2.81 验收值", abs(c281 - 197.448520) < 1e-3,
+           f"(got {c281:.6f}, want 197.448520)")
+    print(f"audit regression: {npass} pass, {nfail} fail")
+    return 1 if (nfail or bad) else 0
 
 if __name__ == "__main__":
     selftest()
