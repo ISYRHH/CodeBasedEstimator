@@ -16,10 +16,10 @@ def test_list_routes_includes_both_candidates_without_costing(monkeypatch, capsy
     monkeypatch.setattr(cli, "estimate", lambda *args, **kwargs: pytest.fail("listing ran estimator"))
     assert main(["hamming", "--list-routes", "--json"]) == 0
     records = json.loads(capsys.readouterr().out)
-    assert len(records) == 123
-    assert len({r["name"] for r in records}) == 123
-    assert sum(r["route_id"] == "composite" for r in records) == 28
-    assert sum(r["route_id"] == "u_only" for r in records) == 28
+    assert len(records) == 135
+    assert len({r["name"] for r in records}) == 135
+    assert sum(r["route_id"] == "composite" for r in records) == 32
+    assert sum(r["route_id"] == "u_only" for r in records) == 32
     mito = [r for r in records if r["parameter_set"] == "Mito-1-128"]
     assert [r["targets"] for r in mito] == [30746, 30746, 30746, 15373]
     assert [r["route_id"] for r in mito] == ["baseline", "parity", "u_only", "composite"]
@@ -76,6 +76,7 @@ def test_text_reports_cross_route_winners(different_family_winners, details, cap
 
 @pytest.mark.parametrize("scheme,parameters", [
     ("HARE", {"r": 11, "w": 1, "wr": 1, "we": 2}),
+    ("HEP-QC", {"r": 11, "w": 1, "wr": 1, "we": 2}),
     ("NSS-HQC", {"r": 11, "wsk": 1, "wr1": 1, "wr2": 1, "we": 2}),
     ("TriQ-KEM", {"r": 11, "wx": 1, "wy": 1, "wr": 1, "we": 2}),
     ("Mito", {"r": 7, "d": 2, "wx": [1, 1], "wy": [1, 1],

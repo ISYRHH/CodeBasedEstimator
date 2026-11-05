@@ -299,7 +299,7 @@ def test_catalogue_profiles_match_cli_route_export(mode, capsys):
     assert main(["hamming", "--list-routes", "--unbalanced", mode, "--json"]) == 0
     actual = json.loads(capsys.readouterr().out)
     expected = hamming_instances(unbalanced=mode)
-    assert len(actual) == len(expected) == 123
+    assert len(actual) == len(expected) == 135
     for row, attack in zip(actual, expected):
         assert row["name"] == attack.name
         assert row["problem"] == _json_normalized(asdict(attack.problem))

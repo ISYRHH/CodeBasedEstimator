@@ -45,6 +45,12 @@ EXPECTED = {
         "HARE-7": (209738, 104869, 386, 104869, 386, 2),
         "HARE-9": (347962, 173981, 518, 173981, 518, 2),
     },
+    "HEP-QC": {
+        "HEP-QC-1": (35338, 17669, 132, 17669, 150, 2),
+        "HEP-QC-3": (71702, 35851, 200, 35851, 228, 2),
+        "HEP-QC-5": (115274, 57637, 262, 57637, 298, 2),
+        "HEP-QC-7": (394246, 197123, 522, 197123, 594, 2),
+    },
     "NSS-HQC": {
         "NSS-HQC-128": (58886, 29443, 146, 29443, 132, 2),
         "NSS-HQC-256": (108986, 54493, 234, 54493, 212, 2),
@@ -92,6 +98,7 @@ EXPECTED_TARGETS = {
     "BIKE_MLThre": [12323, 24659, 40973, 150001],
     "TRIKE": [9437, 19181, 32987, 62981, 103043],
     "HARE": [16067, 20899, 32653, 52379, 104869, 173981],
+    "HEP-QC": [17669, 35851, 57637, 197123],
     "NSS-HQC": [29443, 54493, 122579, 217901],
     "TriQ-KEM": [16301, 50363, 97651, 157627],
     "Mito": [30746, 67654, 212522, 29242, 64522, 204874, 41012, 86092, 261172],
@@ -145,7 +152,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert set(HAMMING_SCHEMES) == set(EXPECTED)
     expected_ids = {parameter_set for sets in EXPECTED.values() for parameter_set in sets}
     catalogue = hamming_catalogue()
-    assert len(catalogue) == len(expected_ids) == 43
+    assert len(catalogue) == len(expected_ids) == 47
     assert {row["parameter_set"] for row in catalogue} == expected_ids
     for scheme, sets in EXPECTED.items():
         assert set(HammingScheme(scheme).parameter_sets) == set(sets)
@@ -156,7 +163,7 @@ def test_catalogue_covers_all_sets_and_copies_nested_source_data():
     assert copied["parameters"]["wx"] == [44, 41]
     assert copied["references"]
     attacks = hamming_instances()
-    assert len(attacks) == len({attack.name for attack in attacks}) == 123
+    assert len(attacks) == len({attack.name for attack in attacks}) == 135
 
 
 @pytest.mark.parametrize("doom", ["auto", "none"])
@@ -304,7 +311,7 @@ def test_cli_csv_has_numeric_costs_only_for_available_routes(capsys):
     records = list(csv.DictReader(io.StringIO(capsys.readouterr().out)))
     assert len(records) == 10
     assert set(records[0]) == {
-        "scheme", "parameter_set", "goal", "n", "k", "w", "q", "model",
+        "scheme", "parameter_set", "goal", "n", "k", "w", "q", "m", "r", "model",
         "algorithm", "status", "time_log2", "memory_log2", "time_unit",
         "memory_unit", "is_best", "reason", "cost_model", "matrix_profile", "matrix_block_size",
         "problem_kind", "doom", "targets", "active_targets",

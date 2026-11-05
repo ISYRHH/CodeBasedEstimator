@@ -18,6 +18,10 @@ COMPOSITE_EXPECTED = [
     ("HARE", "HARE-5", 157137, 52379, 486, 52379),
     ("HARE", "HARE-7", 314607, 104869, 747, 104869),
     ("HARE", "HARE-9", 521943, 173981, 967, 173981),
+    ("HEP-QC", "HEP-QC-1", 53007, 17669, 225, 17669),
+    ("HEP-QC", "HEP-QC-3", 107553, 35851, 342, 35851),
+    ("HEP-QC", "HEP-QC-5", 172911, 57637, 447, 57637),
+    ("HEP-QC", "HEP-QC-7", 591369, 197123, 891, 197123),
     ("NSS-HQC", "NSS-HQC-128", 88329, 29443, 249, 29443),
     ("NSS-HQC", "NSS-HQC-256", 163479, 54493, 399, 54493),
     ("NSS-HQC", "NSS-HQC-384", 367737, 122579, 597, 122579),
@@ -62,6 +66,7 @@ def test_composite_reference_tuples(scheme, parameter_set, n, k, w, targets, doo
 
 @pytest.mark.parametrize("scheme,parameter_set", [
     ("HARE", "HARE-2"),
+    ("HEP-QC", "HEP-QC-1"),
     ("NSS-HQC", "NSS-HQC-128"),
     ("TriQ-KEM", "TriQ-KEM-128"),
     ("Mito", "Mito-1-128"),

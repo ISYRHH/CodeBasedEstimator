@@ -1,6 +1,7 @@
 """Reviewed Hamming parameter snapshot.
 
-TRIKE updated to v1.6 on 2026-10-20; Mito/QUBE reconciled on 2026-10-14.
+HEP-QC added on 2026-11-03; TRIKE updated to v1.6 on 2026-10-20;
+Mito/QUBE reconciled on 2026-10-14.
 See docs/parameter_consistency.md.
 
 References identify the specification version or reference parameter set.
@@ -87,6 +88,38 @@ HAMMING_PARAMETERS = [{'scheme': 'BIKE_MLThre',
   'parameters': {'r': 173981, 'w': 259, 'wr': 259, 'we': 449},
   'references': ['HARE specification v1.5, Table 2 (p. 11)'],
   'notes': ['Key weight = 2*w; u-only message weight = 2*wr; composite message weight = 2*wr+we.']},
+ {'scheme': 'HEP-QC',
+  'parameter_set': 'HEP-QC-1',
+  'parameters': {'r': 17669, 'w': 66, 'wr': 75, 'we': 75,
+                 'n1': 46, 'n2': 384, 'code_length': 17664, 'message_bits': 128},
+  'references': ['HEP-QC specification, Table 4.1; reference and x86_64 parameter headers'],
+  'notes': ['r is the specification n; w, wr and we are per-block weights.',
+            'The public masked generator has message_bits rows; the ciphertext v is truncated to code_length bits.',
+            'Recovering the sparse pair (x,y) does not recover the secret scrambler T or permutation P.']},
+ {'scheme': 'HEP-QC',
+  'parameter_set': 'HEP-QC-3',
+  'parameters': {'r': 35851, 'w': 100, 'wr': 114, 'we': 114,
+                 'n1': 56, 'n2': 640, 'code_length': 35840, 'message_bits': 192},
+  'references': ['HEP-QC specification, Table 4.1; reference and x86_64 parameter headers'],
+  'notes': ['r is the specification n; w, wr and we are per-block weights.',
+            'The public masked generator has message_bits rows; the ciphertext v is truncated to code_length bits.',
+            'Recovering the sparse pair (x,y) does not recover the secret scrambler T or permutation P.']},
+ {'scheme': 'HEP-QC',
+  'parameter_set': 'HEP-QC-5',
+  'parameters': {'r': 57637, 'w': 131, 'wr': 149, 'we': 149,
+                 'n1': 90, 'n2': 640, 'code_length': 57600, 'message_bits': 256},
+  'references': ['HEP-QC specification, Table 4.1; reference and x86_64 parameter headers'],
+  'notes': ['r is the specification n; w, wr and we are per-block weights.',
+            'The public masked generator has message_bits rows; the ciphertext v is truncated to code_length bits.',
+            'Recovering the sparse pair (x,y) does not recover the secret scrambler T or permutation P.']},
+ {'scheme': 'HEP-QC',
+  'parameter_set': 'HEP-QC-7',
+  'parameters': {'r': 197123, 'w': 261, 'wr': 297, 'we': 297,
+                 'n1': 220, 'n2': 896, 'code_length': 197120, 'message_bits': 512},
+  'references': ['HEP-QC specification, Table 4.1; reference and x86_64 parameter headers'],
+  'notes': ['r is the specification n; w, wr and we are per-block weights.',
+            'The public masked generator has message_bits rows; the ciphertext v is truncated to code_length bits.',
+            'Recovering the sparse pair (x,y) does not recover the secret scrambler T or permutation P.']},
  {'scheme': 'NSS-HQC',
   'parameter_set': 'NSS-HQC-128',
   'parameters': {'r': 29443, 'wsk': 73, 'wr1': 66, 'wr2': 66, 'we': 117},
