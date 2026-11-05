@@ -1,6 +1,6 @@
 # CodeBasedEstimator
 
-编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、MAGE-Stern 和二元 SD 的 QPrange／QSS／QMMT+ 量子估计；内置 9 个 Hamming 方案（43 组参数）和 5 个 Rank 方案（17 组参数）。成本口径见[模型说明](docs/model.md)，QPrange 及其块画像的范围见[使用说明](docs/qprange.md)，参数版本与差异见[参数说明](docs/parameter_consistency.md)。
+编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、MAGE-Stern 和二元 SD 的 QPrange／QSS／QMMT+ 量子估计；内置 10 个 Hamming 方案（47 组参数）和 5 个 Rank 方案（17 组参数）。成本口径见[模型说明](docs/model.md)，QPrange 及其块画像的范围见[使用说明](docs/qprange.md)，参数版本与差异见[参数说明](docs/parameter_consistency.md)。
 
 ## 安装
 

@@ -16,7 +16,7 @@ from .unbalanced import BlockProfile
 
 
 HAMMING_SCHEMES = (
-    "BIKE_MLThre", "TRIKE", "HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE",
+    "BIKE_MLThre", "TRIKE", "HARE", "HEP-QC", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE",
     "QCTM", "UVW-KEM",
 )
 GOALS = ("key_recovery", "msg_recovery")
@@ -24,7 +24,7 @@ GOALS = ("key_recovery", "msg_recovery")
 DEFAULT_HAMMING_ALGORITHMS = None
 DOOM_MODES = ("auto", "none")
 UNBALANCED_MODES = ("auto", "none")
-COMPOSITE_MSG_SCHEMES = ("HARE", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE")
+COMPOSITE_MSG_SCHEMES = ("HARE", "HEP-QC", "NSS-HQC", "TriQ-KEM", "Mito", "QUBE")
 
 _ASSUMPTIONS = (
     "Decoding cost only; scheme-level recovery, validation and support correlations are not modeled.",
@@ -207,7 +207,7 @@ class HammingScheme:
             elif scheme == "TRIKE":
                 n, k, w = 3 * p["r"], (2 if key else 1) * p["r"], p["w"] if key else p["t"]
                 formula = "(3r,2r,w)" if key else "(3r,r,t)"
-            elif scheme == "HARE":
+            elif scheme in ("HARE", "HEP-QC"):
                 n, k, w = 2 * p["r"], p["r"], 2 * (p["w"] if key else p["wr"])
                 formula = "(2r,r,2w)" if key else "(2r,r,2wr)"
             elif scheme == "NSS-HQC":
@@ -290,6 +290,23 @@ class HammingScheme:
         for instance in instances:
             profile = instance.block_profile if unbalanced == "auto" else None
             notes = instance.assumptions
+            if scheme == "HEP-QC":
+                if key:
+                    notes += (
+                        "Recovers only the sparse secret pair (x,y) from s=x+h*y; the secret scrambler T and permutation P are not recovered.",
+                        "This sparse-key subproblem is not a complete HEP-QC private-key or decryption recovery estimate.",
+                    )
+                    instance = replace(instance, route="Sparse-key subproblem: (n,k,w)=(2r,r,2w); excludes T and P")
+                elif instance.route_id == "u_only":
+                    notes += (
+                        "After recovering r2, message recovery still requires decoding v-Truncate(s*r2) under the public masked generator G'_L and validating the candidate; this residual low-rate decoding cost is not included.",
+                    )
+                else:
+                    notes += (
+                        "HEP-QC transmits only L=code_length coordinates of v; the missing r-L tail and the full message mask m*G' are supplied for free in this conditional full-length core.",
+                        "The r cyclic targets belong only to that supplied core; they are not a DOOM orbit of the actual truncated unknown-message ciphertext or its projection through G'_L.",
+                    )
+                    instance = replace(instance, route="Conditional full-length known-mask core: (n,k,w)=(3r,r,2wr+we)")
             if scheme == "TriQ-KEM" and not key:
                 notes += (
                     "TriQ-KEM's bounded-density sampler is approximated by fixed-weight sampling; window constraints and retry limits are not modeled.",
