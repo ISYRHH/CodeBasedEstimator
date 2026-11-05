@@ -100,3 +100,15 @@ print(report.to_dict())
 ```sh
 node --test tests/test_web_ui.cjs
 ```
+
+## 引用
+
+如果本项目对您的研究有帮助，请使用以下格式引用：
+
+```bibtex
+@misc{decodingcostlens,
+  title  = {{Decoding Cost Lens}: Cost Estimation for Code-Based Cryptography},
+  author = {Tianrui Wang and Anyu Wang and Yuxuan Li and Qicheng Teng and Bo Pang},
+  url    = {https://github.com/ISYRHH/CodeBasedEstimator}
+}
+```
