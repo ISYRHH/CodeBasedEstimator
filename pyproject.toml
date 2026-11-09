@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codebased-estimator"
 version = "0.1.0"
-description = "Research demo for code-based recovery cost estimation"
+description = "Decoding Cost Lens (DCL): code-based decoding cost estimation"
 requires-python = ">=3.9"
 dependencies = ["cryptographic-estimators==2.1.1"]
 
