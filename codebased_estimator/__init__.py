@@ -1,4 +1,4 @@
-"""Code-based recovery estimation research demo."""
+"""Decoding Cost Lens (DCL): code-based decoding cost estimation."""
 
 from .estimator import estimate
 from .models import AttackInstance, AttackModel, Conclusion, Estimate, Options, Problem, Report

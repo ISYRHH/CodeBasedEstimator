@@ -51,6 +51,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* Header and page width follow the TRIKE reference site. */
 .site-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 24px;

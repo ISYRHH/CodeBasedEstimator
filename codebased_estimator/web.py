@@ -1,4 +1,4 @@
-"""Local browser interface with cancellable background estimator jobs.
+"""Decoding Cost Lens (DCL): local browser interface for decoding cost estimation.
 
 Run with ``python -m codebased_estimator.web``.  Each evaluation runs in a
 separate spawned process, leaving HTTP requests and cancellation responsive.
@@ -434,7 +434,7 @@ class EstimatorServer(ThreadingHTTPServer):
 
 class EstimatorHandler(BaseHTTPRequestHandler):
     server: EstimatorServer
-    server_version = "CodeBasedEstimator"
+    server_version = "DecodingCostLens"
 
     def setup(self) -> None:
         super().setup()
@@ -575,7 +575,7 @@ def main(argv=None) -> int:
     except OSError as exc:
         parser.exit(1, f"Unable to start the web interface: {exc}\n")
     host, port = server.server_address
-    print(f"Code-based Estimator: http://{host}:{port}\nPress Ctrl+C to stop.", flush=True)
+    print(f"Decoding Cost Lens (DCL): http://{host}:{port}\nPress Ctrl+C to stop.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

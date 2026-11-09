@@ -1,6 +1,6 @@
-# CodeBasedEstimator
+# Decoding Cost Lens (DCL)
 
-编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、MAGE-Stern 和二元 SD 的 QPrange／QSS／QMMT+ 量子估计；内置 10 个 Hamming 方案（47 组参数）和 5 个 Rank 方案（17 组参数）。成本口径见[模型说明](docs/model.md)，QPrange 及其块画像的范围见[使用说明](docs/qprange.md)，参数版本与差异见[参数说明](docs/parameter_consistency.md)。
+编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、MAGE-Stern 和二元 SD 的 QPrange／QSS／QMMT+ 量子估计；内置 10 个 Hamming 方案（47 组参数）和 5 个 Rank 方案（17 组参数）。成本口径见[模型说明](docs/hamming_model.md)，QPrange 及其块画像的范围见[使用说明](docs/qprange.md)，参数版本与差异见[参数说明](docs/parameter_consistency.md)。
 
 ## 安装
 
@@ -54,9 +54,9 @@ python3 -m venv .venv
   --goal key_recovery --classical-algorithms Rank-OJ --json
 ```
 
-`rank` 默认运行所选方案的经典候选，量子候选默认关闭；可用 `--csv` 导出逐算法结果。其他 CLI 默认运行已注册的经典与量子候选；算法选项后留空可关闭该类别。`hamming` 默认 `--doom auto`，`--doom none` 关闭多目标。目标数和每综合征解数是不同输入，定义见[输入与计量](docs/model.md#输入与计量)；完整选项见各子命令的 `--help`。
+`rank` 默认运行所选方案的经典候选，量子候选默认关闭；可用 `--csv` 导出逐算法结果。其他 CLI 默认运行已注册的经典与量子候选；算法选项后留空可关闭该类别。`hamming` 默认 `--doom auto`，`--doom none` 关闭多目标。目标数和每综合征解数是不同输入，定义见[输入与计量](docs/hamming_model.md#输入与计量)；完整选项见各子命令的 `--help`。
 
-已知各块重量的路线默认启用 `--unbalanced auto`，修正外层成功概率并重新优化；`--unbalanced none` 使用总重量基线。适用范围见[外层块概率](docs/model.md#unbalanced-外层块概率)。
+已知各块重量的路线默认启用 `--unbalanced auto`，修正外层成功概率并重新优化；`--unbalanced none` 使用总重量基线。适用范围见[外层块概率](docs/hamming_model.md#unbalanced-外层块概率)。
 
 ## 输出
 
@@ -86,7 +86,7 @@ report = estimate(instance, options=Options(
 print(report.to_dict())
 ```
 
-自定义输入使用 `AttackInstance.from_dict(...)`。已知块重量可用 `BlockProfile` 或 JSON 的 `block_profile` 指定，定义见[外层块概率](docs/model.md#unbalanced-外层块概率)。路线比较仅覆盖已估计的候选。
+自定义输入使用 `AttackInstance.from_dict(...)`。已知块重量可用 `BlockProfile` 或 JSON 的 `block_profile` 指定，定义见[外层块概率](docs/hamming_model.md#unbalanced-外层块概率)。路线比较仅覆盖已估计的候选。
 
 ## 测试
 

@@ -1,4 +1,4 @@
-"""Plain tables or JSON, with no service or UI dependency."""
+"""Decoding Cost Lens (DCL): decoding cost estimates as plain tables or JSON."""
 
 from __future__ import annotations
 

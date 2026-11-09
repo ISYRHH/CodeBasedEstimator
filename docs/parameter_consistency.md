@@ -1,6 +1,6 @@
 # 参数版本变更与一致性核对
 
-本文仅记录相对提交文档的版本更新、参数选用差异，以及文档内部不一致的核对结论。单纯新增方案或参数组无需更新本文。完整参数、来源和兼容备注见 [hamming_parameters.py](../codebased_estimator/hamming_parameters.py)；攻击映射见[模型说明](model.md#内置-hamming-方案的-doom-映射)。
+本文仅记录相对提交文档的版本更新、参数选用差异，以及文档内部不一致的核对结论。单纯新增方案或参数组无需更新本文。完整参数、来源和兼容备注见 [hamming_parameters.py](../codebased_estimator/hamming_parameters.py)；攻击映射见[模型说明](hamming_model.md#内置-hamming-方案的-doom-映射)。
 
 ## 版本与选用差异
 
