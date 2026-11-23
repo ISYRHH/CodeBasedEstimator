@@ -31,7 +31,7 @@ def estimate(
             if (instance.problem.kind == "rank_scheme" or any(
                     name.startswith("Rank-") for name in options.classical_algorithms or ())):
                 backends["classical"]["local_rank"] = {
-                    "implementation": "rank_sd_estimator.py / rank_sd_schemes.py",
+                    "implementation": "rank_sd_estimator.py / rank_sd_schemes.py / zd_mm.py",
                     "resource_scope": "time_only",
                 }
         else:

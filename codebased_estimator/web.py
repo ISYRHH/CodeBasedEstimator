@@ -276,7 +276,14 @@ def _finite_json(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None
     if isinstance(value, dict):
-        return {key: _finite_json(item) for key, item in value.items()}
+        result = {key: _finite_json(item) for key, item in value.items()}
+        if result.get("algorithm") == "Rank-ZD-MM" and "parameters" in result:
+            # Preserve exact minor counts in the browser and its JSON exports.
+            result["parameters"] = {
+                key: str(item) if isinstance(item, int) and item >= 2**53 else item
+                for key, item in result["parameters"].items()
+            }
+        return result
     if isinstance(value, (list, tuple)):
         return [_finite_json(item) for item in value]
     return value

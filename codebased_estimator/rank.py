@@ -1,4 +1,4 @@
-"""Adapters for the existing local Rank scripts; their calculations are unchanged."""
+"""Rank estimators for generic problems and built-in scheme profiles."""
 
 from __future__ import annotations
 
@@ -24,11 +24,11 @@ _GENERIC = {
     "Rank-CWW": generic.cww_new_hybrid,
 }
 _SCHEME_ALGORITHMS = {
-    "BAG-Loong": ("Rank-OJ", "Rank-PRR", "Rank-MM"),
-    "BAG-Piglet": ("Rank-OJ", "Rank-PRR", "Rank-MM"),
-    "BRA": ("Rank-MM", "Rank-AGHT", "Rank-PRR", "Rank-OJ"),
-    "BRQC": ("Rank-MM", "Rank-AGHT", "Rank-PRR", "Rank-OJ"),
-    "C-Multi-UR-AG": ("Rank-MM", "Rank-SM", "Rank-AGHT", "Rank-OJ",
+    "BAG-Loong": ("Rank-OJ", "Rank-PRR", "Rank-MM", "Rank-ZD-MM"),
+    "BAG-Piglet": ("Rank-OJ", "Rank-PRR", "Rank-MM", "Rank-ZD-MM"),
+    "BRA": ("Rank-MM", "Rank-ZD-MM", "Rank-AGHT", "Rank-PRR", "Rank-OJ"),
+    "BRQC": ("Rank-MM", "Rank-ZD-MM", "Rank-AGHT", "Rank-PRR", "Rank-OJ"),
+    "C-Multi-UR-AG": ("Rank-MM", "Rank-ZD-MM", "Rank-SM", "Rank-AGHT", "Rank-OJ",
                       "Rank-RSL-AGHT", "Rank-RSL-OJ"),
 }
 RANK_GENERIC_ALGORITHMS = tuple(_GENERIC)
@@ -98,8 +98,8 @@ class RankScheme:
         return [AttackInstance(
             name=f"{parameter_set}/{goal}", scheme=self.scheme, parameter_set=parameter_set,
             goal=goal, problem=Problem("rank_scheme", parameters), route_id=route_id,
-            route=f"{self.scheme}: existing script {route_id.replace('_', ' ')}",
-            assumptions=("Uses the existing local Rank script parameters and calculations; memory is not estimated.",),
+            route=f"{self.scheme}: {'key' if goal == 'key_recovery' else 'message'} recovery",
+            assumptions=("Costs use the scheme's matrix multiplication exponent and report time only.",),
             references=(_SOURCE,),
         )]
 
@@ -220,6 +220,19 @@ class RankModel:
         if reason:
             return Estimate(**base, status="not_implemented", reason=reason, metadata=metadata)
         try:
+            if name == "Rank-ZD-MM":
+                from .zd_mm import evaluate
+                from .zd_mm_profiles import PROFILES
+
+                profile = PROFILES[(instance.parameter_set, instance.goal)]
+                omega = instance.problem.parameters["omega"]
+                cost, details = evaluate(profile, omega)
+                metadata.update(implementation="zd_mm.py", omega=omega,
+                                stage_log2=details.pop("stage_log2"),
+                                success_neglog2=details.pop("success_neglog2"))
+                base["references"] = (*instance.references, "ZD-MM work-factor model (docs/zd_mm.md)")
+                return Estimate(**base, status="computed", time_log2=cost,
+                                parameters=details, metadata=metadata)
             if instance.problem.kind == "rank_scheme":
                 cost, optimal = _scheme_cost(name, instance)
                 finite = cost is not None and isfinite(cost)

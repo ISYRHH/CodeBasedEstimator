@@ -51,8 +51,10 @@ python3 -m venv .venv
 .venv/bin/python -m codebased_estimator rank --list
 .venv/bin/python -m codebased_estimator rank --schemes BAG-Loong --list-routes
 .venv/bin/python -m codebased_estimator rank --parameter-sets BAG-Loong-128 \
-  --goal key_recovery --classical-algorithms Rank-OJ --json
+  --goal key_recovery --classical-algorithms Rank-MM Rank-ZD-MM --json
 ```
+
+五个内置 Rank 方案均可选择 `Rank-ZD-MM`（Zero-direction maximal minors）。估计器按报告选定的块结构、猜零和穿孔参数重新计算期望位操作数。运行 `python -m codebased_estimator rank --classical-algorithms Rank-ZD-MM --csv` 可导出全部 17 组参数的密钥和消息恢复成本。公式、分阶段费用和算例见 [ZD-MM 模型说明](docs/zd_mm.md)。
 
 `rank` 默认运行所选方案的经典候选，量子候选默认关闭；可用 `--csv` 导出逐算法结果。其他 CLI 默认运行已注册的经典与量子候选；算法选项后留空可关闭该类别。`hamming` 默认 `--doom auto`，`--doom none` 关闭多目标。目标数和每综合征解数是不同输入，定义见[输入与计量](docs/hamming_model.md#输入与计量)；完整选项见各子命令的 `--help`。
 
@@ -82,7 +84,7 @@ from codebased_estimator import Options, estimate, rank_instances
 
 instance, = rank_instances(parameter_sets=["BAG-Loong-128"], goal="key_recovery")
 report = estimate(instance, options=Options(
-    classical_algorithms=("Rank-OJ",), quantum_algorithms=()))
+    classical_algorithms=("Rank-MM", "Rank-ZD-MM"), quantum_algorithms=()))
 print(report.to_dict())
 ```
 
