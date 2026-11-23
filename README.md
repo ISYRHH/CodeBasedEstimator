@@ -2,6 +2,8 @@
 
 编码密码译码成本估计工具，基于 [CryptographicEstimators](https://github.com/Crypto-TII/CryptographicEstimators) 2.1.1。支持经典 SD／Rank SD、MAGE-Stern 和二元 SD 的 QPrange／QSS／QMMT+ 量子估计；内置 10 个 Hamming 方案（47 组参数）和 5 个 Rank 方案（17 组参数）。成本口径见[模型说明](docs/hamming_model.md)，QPrange 及其块画像的范围见[使用说明](docs/qprange.md)，参数版本与差异见[参数说明](docs/parameter_consistency.md)。
 
+[项目网站](https://pqc-dcl.info/) 汇总了 NGCC 首轮候选方案的译码成本估计结果。[配套论文（IACR ePrint 2026/2994）](https://eprint.iacr.org/2026/2994) 说明了如何将密钥恢复与消息恢复建模为译码问题，并将估计成本与各方案声明的成本及安全目标进行比较。
+
 ## 安装
 
 需要 Python ≥ 3.9：
@@ -103,12 +105,14 @@ node --test tests/test_web_ui.cjs
 
 ## 引用
 
-如果本项目对您的研究有帮助，请使用以下格式引用：
+如在研究中使用 DCL，请引用配套论文。
 
 ```bibtex
-@misc{decodingcostlens,
-  title  = {{Decoding Cost Lens}: Cost Estimation for Code-Based Cryptography},
-  author = {Tianrui Wang and Anyu Wang and Yuxuan Li and Qicheng Teng and Bo Pang},
-  url    = {https://github.com/ISYRHH/CodeBasedEstimator}
+@misc{cryptoeprint:2026/2994,
+  author       = {Tianrui Wang and Anyu Wang and Yuxuan Li and Qicheng Teng and Bo Pang},
+  title        = {{Decoding Cost Lens}: Cost Estimation for Code-Based Cryptography},
+  howpublished = {Cryptology {ePrint} Archive, Paper 2026/2994},
+  year         = {2026},
+  url          = {https://eprint.iacr.org/2026/2994}
 }
 ```
