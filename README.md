@@ -90,6 +90,8 @@ print(report.to_dict())
 
 自定义输入使用 `AttackInstance.from_dict(...)`。已知块重量可用 `BlockProfile` 或 JSON 的 `block_profile` 指定，定义见[外层块概率](docs/hamming_model.md#unbalanced-外层块概率)。路线比较仅覆盖已估计的候选。
 
+HARE 真实公开尾部的线性观察及独立验证见[公开尾部约束](docs/hare_observations.md)；该模块不增加默认估算路线或新的攻击成本。
+
 ## 测试
 
 ```sh
